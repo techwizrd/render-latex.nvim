@@ -140,6 +140,7 @@ local function register_autocmds()
   })
 
   update_transient_ui_suppression(true)
+  return queue_visible_buffers
 end
 
 ---@param opts? render_latex.UserConfig
@@ -154,13 +155,25 @@ function M.setup(opts)
   local Config = require("render_latex.config")
   Config.setup(opts)
   M.did_setup = true
+  local install_ready = false
+  local queue_after_install
+  require("render_latex.install").ensure_installed_async(function(path)
+    if path == nil then
+      return
+    end
+    if queue_after_install ~= nil then
+      queue_after_install()
+    else
+      install_ready = true
+    end
+  end)
   if Config.tmux.install_cleanup_hooks then
     require("render_latex.tmux").install_cleanup_hooks()
   end
-  register_autocmds()
-  vim.schedule(function()
-    require("render_latex.install").ensure_installed_async()
-  end)
+  queue_after_install = register_autocmds()
+  if install_ready then
+    queue_after_install()
+  end
 end
 
 function M.enable()

@@ -252,7 +252,8 @@ function M.install_worker(notify, callback)
   end)
 end
 
-function M.ensure_installed_async()
+---@param callback? fun(path: string?, err: string?)
+function M.ensure_installed_async(callback)
   if not Config.install.auto or install_running or M.resolve_worker_path() ~= nil then
     return
   end
@@ -262,6 +263,9 @@ function M.ensure_installed_async()
       Util.warn(
         "render-latex worker install failed. Run :RenderLatex install or :RenderLatex doctor."
       )
+    end
+    if callback ~= nil then
+      callback(M.resolve_worker_path(), err)
     end
   end)
 end

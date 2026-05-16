@@ -84,15 +84,18 @@ end
 
 local function start_worker()
   if state.handle ~= nil then
-    return true
+    return true, nil
   end
 
   local bin = Install.ensure_worker_path()
   if bin == nil then
+    if Install.status().installing then
+      return false, "worker installing"
+    end
     Util.error(
       "render-latex worker not found. Run :RenderLatex install, :RenderLatex build, or configure worker.bin."
     )
-    return false
+    return false, "worker unavailable"
   end
 
   local stdin = vim.uv.new_pipe(false)
@@ -114,7 +117,7 @@ local function start_worker()
     stdout:close()
     stderr:close()
     Util.error("Failed to start render-latex worker: " .. tostring(pid_or_err))
-    return false
+    return false, "worker unavailable"
   end
 
   state.handle = handle
@@ -144,15 +147,16 @@ local function start_worker()
     table.insert(state.stderr_chunks, chunk)
   end)
 
-  return true
+  return true, nil
 end
 
 ---@param method string
 ---@param params table
 ---@param callback fun(result: any, err: string?)
 function M.request(method, params, callback)
-  if not start_worker() then
-    callback(nil, "worker unavailable")
+  local ok, err = start_worker()
+  if not ok then
+    callback(nil, err or "worker unavailable")
     return
   end
 

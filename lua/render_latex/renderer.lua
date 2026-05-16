@@ -643,6 +643,9 @@ local function request_renders(bufnr, equations_to_render)
       for _, equation in ipairs(pending_equations) do
         state.pending[equation.key] = nil
       end
+      if err == "worker installing" then
+        return
+      end
       if state.last_worker_error ~= err then
         state.last_worker_error = err
         Util.warn(("Failed to render equations: %s"):format(err))
