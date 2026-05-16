@@ -811,15 +811,37 @@ end)
 
 describe("render_latex.image_backend", function()
   it("uses explicit nvim backend when available", function()
+    local previous_img = vim.ui.img
+    vim.ui.img = {
+      set = function() end,
+      get = function() end,
+      del = function() end,
+    }
     config.setup({ image = { backend = "nvim" } })
 
     local backend, name, reason = image_backend.get()
 
     config.setup()
+    vim.ui.img = previous_img
 
     assert.is_truthy(backend)
     assert.are.equal("nvim", name)
     assert.is_nil(reason)
+  end)
+
+  it("reports unavailable explicit nvim backend without vim.ui.img", function()
+    local previous_img = vim.ui.img
+    vim.ui.img = {}
+    config.setup({ image = { backend = "nvim" } })
+
+    local backend, name, reason = image_backend.get()
+
+    config.setup()
+    vim.ui.img = previous_img
+
+    assert.is_nil(backend)
+    assert.are.equal("nvim", name)
+    assert.are.equal("vim.ui.img is unavailable", reason)
   end)
 
   it("reports unavailable explicit kitty backend without terminal support", function()
