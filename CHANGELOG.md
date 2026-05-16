@@ -6,6 +6,8 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ## Unreleased
 
+## 0.1.0-rc1 - 2026-05-16
+
 ### Added
 
 - Added zero-config setup with background prebuilt worker installation.
@@ -44,4 +46,4 @@ Expected highlights:
 - Persistent Rust worker backed by RaTeX.
 - Neovim image API and Kitty graphics backend support, including tmux passthrough.
 - Compatibility diagnostics for `obsidian.nvim` and `render-markdown.nvim`.
-- Prebuilt workers for Linux x64, macOS x64, macOS arm64, and Windows x64.
+- Prebuilt workers published with releases for Linux x64, macOS x64, macOS arm64, and Windows x64.

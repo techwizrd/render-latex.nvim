@@ -3,7 +3,7 @@
 ## Quick Wins
 
 1. [done] Add command-line and message-area suppression.
-2. [done] Add a `:RenderLatexTmuxCheck` command for explicit tmux diagnostics.
+2. [done] Add `:RenderLatex tmux_check` for explicit tmux diagnostics.
 3. [done] Improve tmux hook detection in health checks.
 4. [done] Add equation-local rerender and debug commands.
 5. [done] Avoid rerendering on focused-equation exit when the text hash is unchanged.

@@ -14,7 +14,9 @@ Fast display-math rendering for Markdown in Neovim, with inline math that stays 
   <a href="assets/demo-light-01.png">Light mode screenshot 1</a> · <a href="assets/demo-light-02.png">Light mode screenshot 2</a> · <a href="assets/demo-dark-02.png">Dark mode screenshot</a>
 </p>
 
-`render-latex.nvim` is for people who write notes, docs, research, or homework in Markdown and want equations to be readable without giving up plain-text editing. Raw LaTeX stays in your buffer. Display equations render when your terminal supports images. Inline math stays lightweight and cursor-friendly. Compatible with [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) and [obsidian.nvim](https://github.com/epwalsh/obsidian.nvim/).
+`render-latex.nvim` is for people who write notes, docs, research, or homework in Markdown and want equations to be readable without giving up plain-text editing.
+
+Raw LaTeX stays in your buffer. Display equations render when your terminal supports images, and inline math stays lightweight and cursor-friendly. It also plays well with [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) and [obsidian.nvim](https://github.com/epwalsh/obsidian.nvim/).
 
 ## Quickstart
 
@@ -28,7 +30,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
-With `vim.pack`:
+With `vim.pack` on Neovim versions that include it:
 
 ```lua
 vim.pack.add({
@@ -51,27 +53,24 @@ The plugin sets itself up with useful defaults and installs the matching prebuil
 :checkhealth render_latex
 ```
 
-## What You Get
+## Features
 
-- Display math blocks like `$$ ... $$` and `\[ ... \]` rendered as transparent PNG images.
-- Inline math like `$x^2$` handled with fast conceal/highlight fallback, not image flicker.
-- A persistent Rust worker that starts once, batches visible equations, and keeps a cache warm.
-- Automatic worker install for common platforms, with source-build fallback when needed.
-- Safe backend selection for Neovim image support or Kitty graphics, including tmux passthrough.
-- Compatibility with Markdown note-taking workflows instead of trying to own the whole buffer.
+- Renders Markdown display math blocks like `$$ ... $$` and `\[ ... \]` as transparent PNG images.
+- Keeps the buffer editable: raw LaTeX stays in the file, and the image is only the rendered view.
+- Handles inline math like `$x^2$` with a fast conceal/highlight fallback instead of image flicker.
+- Uses a persistent Rust worker that starts once, batches visible equations, and keeps a warm cache and directional prefetching.
+- Installs the matching prebuilt worker automatically on common platforms, with a manual source-build path when needed.
+- Chooses a safe image backend for Neovim image support or Kitty graphics, including tmux passthrough.
+- Plays nicely with Markdown note-taking setups, like [`render-markdown.nvim`](https://github.com/MeanderingProgrammer/render-markdown.nvim) and [`obsidian.nvim`](https://github.com/epwalsh/obsidian.nvim), instead of trying to own the whole buffer.
 
-## Why This Exists
-
-Markdown notes with equations should be pleasant to read and safe to edit. This plugin tries to make LaTeX math feel native in Neovim while keeping the buffer editable. The source is still plain Markdown, and the rendered image is just a helpful view of display math.
-
-It is intentionally narrow. It does not try to replace Markdown renderers, note-taking plugins, or a full LaTeX workflow. It focuses on one job: make equations in Markdown easier to live with.
+The goal is intentionally narrow: make equations in Markdown easier to read in Neovim without replacing your Markdown renderer, note-taking setup, or LaTeX workflow.
 
 ## Requirements
 
 - Neovim 0.10+ with `vim.system`, `vim.uv`, `vim.fs`, extmarks, and Treesitter APIs.
 - A display-image backend: Neovim image API support or a Kitty graphics-compatible terminal.
 - For tmux image rendering: `set -g allow-passthrough on`.
-- Prebuilt workers are provided for Linux x64, macOS x64, macOS arm64, and Windows x64.
+- Prebuilt workers are published with releases for Linux x64, macOS x64, macOS arm64, and Windows x64.
 
 Rust is only needed for development, source builds, or unsupported prebuilt platforms such as Linux ARM64.
 

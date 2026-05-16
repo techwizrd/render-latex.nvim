@@ -8,7 +8,7 @@ This plugin sits in the middle of a few sensitive things: Markdown parsing, term
 
 You will need:
 
-- Neovim 0.10+ or nightly for local plugin tests.
+- Neovim 0.10+ for the runtime target. CI also tests newer stable versions and nightly.
 - Rust stable for the worker.
 - Go for the pinned `actionlint` target.
 - `stylua` for Lua formatting.
