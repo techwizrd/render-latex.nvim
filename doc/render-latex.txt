@@ -118,6 +118,13 @@ If you pin plugin versions, pin the worker release too:
   })
 <
 
+If you want rolling worker binaries from `main`, use the unreleased prerelease:
+>
+  require("render_latex").setup({
+    install = { version = "unreleased" },
+  })
+<
+
 For best inline fallback rendering:
 >
   vim.opt.conceallevel = 2
@@ -181,8 +188,9 @@ Install options:
 
                                                 *render-latex-install.version*
 `install.version`        Release version used for worker downloads. Use a tag
-                         like `"v0.1.0"` when pinning the plugin. Default:
-                         `"latest"`.
+                         like `"v0.1.0"` when pinning the plugin, or
+                         `"unreleased"` for rolling prerelease assets from
+                         `main`. Default: `"latest"`.
 
 Render options:
 

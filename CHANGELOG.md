@@ -11,6 +11,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Switched non-tmux Kitty graphics detection from terminal-specific environment checks to a protocol probe with cached results.
 - Made `:RenderLatex build` run asynchronously and refresh visible buffers through the same worker-ready path used by installs.
 - Switched long-running worker build and install commands to native Neovim progress messages.
+- Added a rolling `unreleased` GitHub prerelease workflow for non-tag `main` pushes.
 
 ### Fixed
 

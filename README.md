@@ -104,6 +104,14 @@ require("render_latex").setup({
 })
 ```
 
+If you want rolling worker binaries from `main`, use the `unreleased` prerelease:
+
+```lua
+require("render_latex").setup({
+  install = { version = "unreleased" },
+})
+```
+
 ## Useful Commands
 
 - `:RenderLatex doctor` opens a readable diagnostics buffer.
@@ -148,6 +156,7 @@ Then use one of these options:
 
 - Run `:RenderLatex install` after network access is available.
 - Run `:RenderLatex build` with a local Rust toolchain.
+- Use `install = { version = "unreleased" }` if you want the rolling prerelease worker assets from `main`.
 - Download or build the worker yourself and set `worker.bin = "/path/to/render-latex-worker"`.
 
 Terminal support still matters after the worker is installed. Use Neovim's image API when available, or a Kitty graphics-compatible terminal. Inside tmux, set `set -g allow-passthrough on`.
@@ -176,7 +185,6 @@ After that, the main things I want to explore are:
 - [ ] Worker-side parsing/indexing for large notes.
 - [ ] Kitty placeholder-based rendering for better tmux and scroll behavior.
 - [ ] Checksum verification for downloaded workers.
-- [ ] Async `:RenderLatex build` for source-build workflows.
 - [ ] Moving doctor/tmux diagnostic formatting out of `init.lua` if it keeps growing.
 
 ## Documentation

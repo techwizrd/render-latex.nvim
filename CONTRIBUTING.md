@@ -165,7 +165,7 @@ The runtime installer expects direct executable release assets with these names:
 
 Linux ARM64 is intentionally not advertised as a prebuilt target for the first release. Users on Linux ARM64 should use `:RenderLatex build` or configure `worker.bin`.
 
-The release workflow also uploads `SHA256SUMS`. The installer does not verify checksums yet; keep this as a future hardening task unless release security requirements change.
+The release and unreleased workflows upload `SHA256SUMS`. The installer does not verify checksums yet; let's keep this as a future hardening task unless release security requirements change.
 
 ## Release Checklist
 
@@ -185,7 +185,7 @@ Before tagging a release:
 
 ## CI Notes
 
-CI runs Lua/Neovim tests on Linux and worker builds on Linux, macOS, and Windows. The release workflow builds direct worker executable assets for the supported prebuilt platforms.
+CI runs Lua/Neovim tests on Linux and worker builds on Linux, macOS, and Windows. The release workflow publishes stable tagged assets, and the unreleased workflow refreshes rolling prerelease assets on pushes to `main`.
 
 `Cargo.lock` is committed intentionally so worker release builds are reproducible.
 

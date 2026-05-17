@@ -1,0 +1,81 @@
+name: Unreleased
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: render-latex-worker-linux-x64
+            binary: target/release/render-latex-worker
+          - os: macos-15-intel
+            asset: render-latex-worker-macos-x64
+            binary: target/release/render-latex-worker
+          - os: macos-latest
+            asset: render-latex-worker-macos-arm64
+            binary: target/release/render-latex-worker
+          - os: windows-2025
+            asset: render-latex-worker-windows-x64.exe
+            binary: target/release/render-latex-worker.exe
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Build worker
+        run: cargo build --release --package render-latex-worker
+      - name: Stage asset
+        shell: bash
+        run: cp "${{ matrix.binary }}" "${{ matrix.asset }}"
+      - name: Upload asset artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ matrix.asset }}
+          archive: false
+          if-no-files-found: error
+
+  publish:
+    name: Publish unreleased assets
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write checksums
+        run: cd dist && sha256sum render-latex-worker-* > SHA256SUMS
+      - name: Publish unreleased prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: unreleased
+          name: Unreleased
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          files: |
+            dist/render-latex-worker-*
+            dist/SHA256SUMS
