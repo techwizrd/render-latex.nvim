@@ -3,6 +3,10 @@ local M = {}
 
 M.did_setup = false
 
+local queue_after_worker_ready
+local worker_ready = false
+local worker_ready_listener_registered = false
+
 local function should_attach(bufnr)
   local Config = require("render_latex.config")
   return Config.enabled and Config.is_filetype_supported(vim.bo[bufnr].filetype)
@@ -153,26 +157,26 @@ function M.setup(opts)
     return
   end
   local Config = require("render_latex.config")
+  local Install = require("render_latex.install")
   Config.setup(opts)
+  if not worker_ready_listener_registered then
+    Install.on_worker_ready(function()
+      if queue_after_worker_ready ~= nil then
+        queue_after_worker_ready()
+      else
+        worker_ready = true
+      end
+    end)
+    worker_ready_listener_registered = true
+  end
   M.did_setup = true
-  local install_ready = false
-  local queue_after_install
-  require("render_latex.install").ensure_installed_async(function(path)
-    if path == nil then
-      return
-    end
-    if queue_after_install ~= nil then
-      queue_after_install()
-    else
-      install_ready = true
-    end
-  end)
+  Install.ensure_installed_async()
   if Config.tmux.install_cleanup_hooks then
     require("render_latex.tmux").install_cleanup_hooks()
   end
-  queue_after_install = register_autocmds()
-  if install_ready then
-    queue_after_install()
+  queue_after_worker_ready = register_autocmds()
+  if worker_ready then
+    queue_after_worker_ready()
   end
 end
 
@@ -203,6 +207,7 @@ end
 
 function M.status()
   local status = require("render_latex.worker").status()
+  status.install = require("render_latex.install").status()
   status.render = require("render_latex.renderer").resolved_options()
   status.image_backend = require("render_latex.image_backend").status()
   status.suppression = require("render_latex.renderer").suppression_status()
@@ -276,8 +281,13 @@ function M.doctor_lines()
     "detected platform: " .. tostring(install.system or "<unsupported>"),
     "install repository: " .. install.repository,
     "install version: " .. install.version,
+    "building: " .. tostring(install.building),
     "installing: " .. tostring(install.installing),
   })
+
+  if install.build_error ~= nil then
+    lines[#lines + 1] = "last build error: " .. install.build_error
+  end
 
   if install.last_error ~= nil then
     lines[#lines + 1] = "last install error: " .. install.last_error

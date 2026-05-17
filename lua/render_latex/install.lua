@@ -3,9 +3,46 @@ local Util = require("render_latex.util")
 
 local M = {}
 
+local build_running = false
+local build_error = nil
 local install_running = false
 local install_error = nil
 local install_notified = false
+local ready_listeners = {}
+local progress_ids = {
+  build = nil,
+  install = nil,
+}
+
+local PROGRESS_SOURCE = "render-latex.nvim"
+local PROGRESS_TITLES = {
+  build = "render-latex worker build",
+  install = "render-latex worker install",
+}
+
+local function progress_update(kind, message, status, percent)
+  local opts = {
+    kind = "progress",
+    title = PROGRESS_TITLES[kind],
+    source = PROGRESS_SOURCE,
+    status = status,
+    percent = percent,
+  }
+  if progress_ids[kind] ~= nil then
+    opts.id = progress_ids[kind]
+  end
+
+  local ok, id = pcall(vim.api.nvim_echo, { { message } }, true, opts)
+  if ok and type(id) == "number" then
+    progress_ids[kind] = id
+  end
+end
+
+local function emit_worker_ready(path, operation)
+  for _, listener in ipairs(ready_listeners) do
+    pcall(listener, path, operation)
+  end
+end
 
 local function is_windows_sysname(sysname)
   return sysname:match("Windows") or sysname:match("MINGW") or sysname:match("MSYS")
@@ -117,23 +154,59 @@ function M.resolve_worker_path()
 end
 
 ---@param notify boolean?
----@return string?
-function M.build_worker(notify)
-  local command = { "cargo", "build", "--release", "--package", "render-latex-worker" }
-  local result = vim.system(command, { cwd = Util.root(), text = true }):wait()
-  if result.code ~= 0 then
-    local stderr = vim.trim(result.stderr or "")
+---@param callback? fun(path: string?, err: string?)
+function M.build_worker(notify, callback)
+  if build_running then
     if notify then
-      Util.error("Failed to build render-latex worker" .. (stderr ~= "" and (": " .. stderr) or ""))
+      Util.info("render-latex worker build is already running")
     end
-    return nil
+    return
   end
 
+  local command = { "cargo", "build", "--release", "--package", "render-latex-worker" }
+  build_running = true
+  build_error = nil
   if notify then
-    Util.info("Built render-latex worker")
+    progress_update("build", "Building render-latex worker...", "running", 5)
   end
 
-  return M.local_worker_path()
+  vim.system(command, { cwd = Util.root(), text = true }, function(result)
+    build_running = false
+    vim.schedule(function()
+      local path = M.local_worker_path()
+      if result.code ~= 0 then
+        local stderr = vim.trim(result.stderr or "")
+        build_error = stderr ~= "" and stderr or "build failed"
+        if notify then
+          progress_update(
+            "build",
+            "Failed to build render-latex worker" .. (stderr ~= "" and (": " .. stderr) or ""),
+            "error",
+            100
+          )
+          progress_ids.build = nil
+        end
+        if callback ~= nil then
+          callback(nil, build_error)
+        end
+        return
+      end
+
+      build_error = nil
+      if notify then
+        progress_update("build", "Built render-latex worker", "success", 100)
+        progress_ids.build = nil
+      end
+      emit_worker_ready(path, "build")
+      if callback ~= nil then
+        callback(path, nil)
+      end
+    end)
+  end)
+end
+
+function M.on_worker_ready(listener)
+  ready_listeners[#ready_listeners + 1] = listener
 end
 
 local function download_command(url, output)
@@ -206,6 +279,9 @@ function M.install_worker(notify, callback)
 
   install_running = true
   install_error = nil
+  if notify then
+    progress_update("install", "Installing render-latex worker...", "running", 5)
+  end
   vim.system(command, { text = true }, function(result)
     install_running = false
     vim.schedule(function()
@@ -218,7 +294,8 @@ function M.install_worker(notify, callback)
         install_error = err
         pcall(vim.fn.delete, tmp_path)
         if notify then
-          Util.error(err)
+          progress_update("install", err, "error", 100)
+          progress_ids.install = nil
         end
         if callback ~= nil then
           callback(nil, err)
@@ -234,7 +311,13 @@ function M.install_worker(notify, callback)
       if not rename_ok then
         install_error = tostring(rename_err)
         if notify then
-          Util.error("failed to install render-latex worker: " .. tostring(rename_err))
+          progress_update(
+            "install",
+            "failed to install render-latex worker: " .. tostring(rename_err),
+            "error",
+            100
+          )
+          progress_ids.install = nil
         end
         if callback ~= nil then
           callback(nil, tostring(rename_err))
@@ -243,8 +326,10 @@ function M.install_worker(notify, callback)
       end
 
       if notify then
-        Util.info("Installed render-latex worker")
+        progress_update("install", "Installed render-latex worker", "success", 100)
+        progress_ids.install = nil
       end
+      emit_worker_ready(final_path, "install")
       if callback ~= nil then
         callback(final_path, nil)
       end
@@ -279,7 +364,9 @@ function M.status()
     repository = Config.install.repository,
     version = Config.install.version,
     asset_url = M.asset_url(),
+    building = build_running,
     installing = install_running,
+    build_error = build_error,
     last_error = install_error,
   }
 end
@@ -287,6 +374,19 @@ end
 ---@return string?
 function M.ensure_worker_path()
   return M.resolve_worker_path()
+end
+
+function M.reset_for_tests()
+  build_running = false
+  build_error = nil
+  install_running = false
+  install_error = nil
+  install_notified = false
+  ready_listeners = {}
+  progress_ids = {
+    build = nil,
+    install = nil,
+  }
 end
 
 return M

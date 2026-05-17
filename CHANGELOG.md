@@ -9,10 +9,13 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 ### Changed
 
 - Switched non-tmux Kitty graphics detection from terminal-specific environment checks to a protocol probe with cached results.
+- Made `:RenderLatex build` run asynchronously and refresh visible buffers through the same worker-ready path used by installs.
+- Switched long-running worker build and install commands to native Neovim progress messages.
 
 ### Fixed
 
 - Fixed Ghostty and other Kitty graphics-compatible terminals being reported as unsupported outside tmux.
+- Avoided noisy worker-unavailable warnings while a worker build is in progress.
 
 ## 0.1.0-rc2 - 2026-05-16
 

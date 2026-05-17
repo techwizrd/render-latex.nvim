@@ -655,6 +655,35 @@ describe("render_latex.config", function()
 end)
 
 describe("render_latex.install", function()
+  local previous_system
+  local previous_echo
+  local previous_executable
+  local previous_mkdir
+  local previous_delete
+  local previous_rename
+
+  before_each(function()
+    previous_system = vim.system
+    previous_echo = vim.api.nvim_echo
+    previous_executable = vim.fn.executable
+    previous_mkdir = vim.fn.mkdir
+    previous_delete = vim.fn.delete
+    previous_rename = vim.uv.fs_rename
+    install.reset_for_tests()
+    config.setup()
+  end)
+
+  after_each(function()
+    vim.system = previous_system
+    vim.api.nvim_echo = previous_echo
+    vim.fn.executable = previous_executable
+    vim.fn.mkdir = previous_mkdir
+    vim.fn.delete = previous_delete
+    vim.uv.fs_rename = previous_rename
+    install.reset_for_tests()
+    config.setup()
+  end)
+
   it("normalizes supported platform names", function()
     assert.are.equal("linux-x64", install._system_key_from_uname("Linux", "x86_64"))
     assert.is_nil(install._system_key_from_uname("Linux", "aarch64"))
@@ -674,6 +703,143 @@ describe("render_latex.install", function()
         url
       )
     end
+  end)
+
+  it("builds the worker asynchronously with native progress updates", function()
+    local progress = {}
+    local on_exit
+    local ready_path, ready_operation
+    local callback_path, callback_err
+
+    vim.api.nvim_echo = function(chunks, _, opts)
+      progress[#progress + 1] = { text = chunks[1][1], opts = vim.deepcopy(opts) }
+      return opts.id or #progress
+    end
+    vim.system = function(command, opts, callback)
+      assert.are.same(
+        { "cargo", "build", "--release", "--package", "render-latex-worker" },
+        command
+      )
+      assert.are.equal(vim.fs.normalize(util.root()), vim.fs.normalize(opts.cwd))
+      on_exit = callback
+      return {}
+    end
+    install.on_worker_ready(function(path, operation)
+      ready_path = path
+      ready_operation = operation
+    end)
+
+    install.build_worker(true, function(path, err)
+      callback_path = path
+      callback_err = err
+    end)
+
+    assert.is_true(install.status().building)
+    assert.are.equal("running", progress[1].opts.status)
+    assert.are.equal("render-latex worker build", progress[1].opts.title)
+
+    on_exit({ code = 0, stderr = "" })
+
+    vim.wait(100, function()
+      return callback_path ~= nil or callback_err ~= nil
+    end)
+
+    assert.are.equal(install.local_worker_path(), callback_path)
+    assert.is_nil(callback_err)
+    assert.are.equal(install.local_worker_path(), ready_path)
+    assert.are.equal("build", ready_operation)
+    assert.is_false(install.status().building)
+    assert.are.equal("success", progress[#progress].opts.status)
+    assert.are.equal("Built render-latex worker", progress[#progress].text)
+  end)
+
+  it("records async build failures and does not notify readiness", function()
+    local progress = {}
+    local on_exit
+    local ready_called = false
+    local callback_path, callback_err
+
+    vim.api.nvim_echo = function(chunks, _, opts)
+      progress[#progress + 1] = { text = chunks[1][1], opts = vim.deepcopy(opts) }
+      return opts.id or #progress
+    end
+    vim.system = function(_, _, callback)
+      on_exit = callback
+      return {}
+    end
+    install.on_worker_ready(function()
+      ready_called = true
+    end)
+
+    install.build_worker(true, function(path, err)
+      callback_path = path
+      callback_err = err
+    end)
+    on_exit({ code = 1, stderr = "cargo failed" })
+
+    vim.wait(100, function()
+      return callback_err ~= nil
+    end)
+
+    assert.is_nil(callback_path)
+    assert.are.equal("cargo failed", callback_err)
+    assert.is_false(ready_called)
+    assert.is_false(install.status().building)
+    assert.are.equal("cargo failed", install.status().build_error)
+    assert.are.equal("error", progress[#progress].opts.status)
+  end)
+
+  it("notifies shared readiness listeners after install succeeds", function()
+    local progress = {}
+    local on_exit
+    local callback_path, callback_err
+    local ready_path, ready_operation
+
+    vim.api.nvim_echo = function(chunks, _, opts)
+      progress[#progress + 1] = { text = chunks[1][1], opts = vim.deepcopy(opts) }
+      return opts.id or #progress
+    end
+    vim.fn.executable = function(name)
+      if name == "curl" then
+        return 1
+      end
+      return 0
+    end
+    vim.fn.mkdir = function() end
+    vim.fn.delete = function() end
+    vim.uv.fs_rename = function()
+      return true
+    end
+    vim.system = function(command, _, callback)
+      assert.are.equal("curl", command[1])
+      on_exit = callback
+      return {}
+    end
+    install.on_worker_ready(function(path, operation)
+      ready_path = path
+      ready_operation = operation
+    end)
+
+    install.install_worker(true, function(path, err)
+      callback_path = path
+      callback_err = err
+    end)
+
+    assert.is_true(install.status().installing)
+    assert.are.equal("running", progress[1].opts.status)
+
+    on_exit({ code = 0, stderr = "" })
+
+    vim.wait(100, function()
+      return callback_path ~= nil or callback_err ~= nil
+    end)
+
+    assert.are.equal(install.managed_worker_path(), callback_path)
+    assert.is_nil(callback_err)
+    assert.are.equal(install.managed_worker_path(), ready_path)
+    assert.are.equal("install", ready_operation)
+    assert.is_false(install.status().installing)
+    assert.are.equal("success", progress[#progress].opts.status)
   end)
 end)
 

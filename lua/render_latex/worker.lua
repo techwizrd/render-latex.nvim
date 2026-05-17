@@ -92,6 +92,9 @@ local function start_worker()
     if Install.status().installing then
       return false, "worker installing"
     end
+    if Install.status().building then
+      return false, "worker building"
+    end
     Util.error(
       "render-latex worker not found. Run :RenderLatex install, :RenderLatex build, or configure worker.bin."
     )
