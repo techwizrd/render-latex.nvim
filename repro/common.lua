@@ -1,6 +1,7 @@
 local M = {}
 
-local plugin_root = "/home/kunal/Projects/nvim-render-latex"
+local source = debug.getinfo(1, "S").source:sub(2)
+local plugin_root = vim.fn.fnamemodify(source, ":p:h:h")
 local worker_bin = plugin_root .. "/target/release/render-latex-worker"
 
 function M.bootstrap_lazy(stdpath_suffix)
