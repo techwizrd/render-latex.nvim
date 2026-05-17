@@ -58,7 +58,6 @@ local function register_autocmds()
     "CompleteDone",
     "WinScrolled",
     "WinResized",
-    "ColorScheme",
   }, {
     group = Config.augroup,
     callback = function(args)
@@ -71,6 +70,15 @@ local function register_autocmds()
         end
       else
         Renderer.detach(bufnr)
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    group = Config.augroup,
+    callback = function()
+      if update_transient_ui_suppression(false) then
+        queue_visible_buffers()
       end
     end,
   })

@@ -854,6 +854,72 @@ describe("render_latex.setup", function()
     assert.are.equal(first, second)
     assert.are.equal("conceal", config.render.inline)
   end)
+
+  it("requeues all visible markdown buffers on ColorScheme", function()
+    local previous_list_wins = vim.api.nvim_list_wins
+    local previous_win_get_config = vim.api.nvim_win_get_config
+    local previous_win_get_buf = vim.api.nvim_win_get_buf
+    local previous_attach = renderer.attach
+    local previous_queue = renderer.queue
+    local previous_suppression = renderer.suppression_status
+    local previous_set_suppressed = renderer.set_suppressed
+    local previous_has_popup = ui.has_popup_or_floating_windows
+    local previous_getcmdtype = vim.fn.getcmdtype
+    local attached = {}
+    local queued = {}
+
+    renderer.attach = function(bufnr)
+      attached[#attached + 1] = bufnr
+    end
+    renderer.queue = function(bufnr)
+      queued[#queued + 1] = bufnr
+    end
+    renderer.suppression_status = function()
+      return { cmdline = false, floating = false }
+    end
+    renderer.set_suppressed = function() end
+    ui.has_popup_or_floating_windows = function()
+      return false
+    end
+    vim.fn.getcmdtype = function()
+      return ""
+    end
+
+    local left = vim.api.nvim_create_buf(false, true)
+    local right = vim.api.nvim_create_buf(false, true)
+    vim.bo[left].filetype = "markdown"
+    vim.bo[right].filetype = "markdown"
+    vim.api.nvim_list_wins = function()
+      return { 101, 202 }
+    end
+    vim.api.nvim_win_get_config = function()
+      return { relative = "" }
+    end
+    vim.api.nvim_win_get_buf = function(winid)
+      return winid == 101 and left or right
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    attached = {}
+    queued = {}
+
+    vim.api.nvim_exec_autocmds("ColorScheme", {})
+
+    vim.api.nvim_list_wins = previous_list_wins
+    vim.api.nvim_win_get_config = previous_win_get_config
+    vim.api.nvim_win_get_buf = previous_win_get_buf
+    renderer.attach = previous_attach
+    renderer.queue = previous_queue
+    renderer.suppression_status = previous_suppression
+    renderer.set_suppressed = previous_set_suppressed
+    ui.has_popup_or_floating_windows = previous_has_popup
+    vim.fn.getcmdtype = previous_getcmdtype
+
+    table.sort(attached)
+    table.sort(queued)
+    assert.are.same({ left, right }, attached)
+    assert.are.same({ left, right }, queued)
+  end)
 end)
 
 describe("render_latex.ui", function()
@@ -1176,6 +1242,94 @@ describe("render_latex.renderer", function()
     end
   end)
 
+  it("rerenders visible equations when highlight colors change", function()
+    config.setup({ render = { foreground = nil, match_text_color = true } })
+    local previous_img = vim.ui.img
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_visible_equations = viewport.visible_equations
+    local previous_readblob = vim.fn.readblob
+    local previous_math = vim.api.nvim_get_hl(0, { name = "@markup.math", link = false })
+    local request_count = 0
+
+    local backend = {
+      set = function()
+        return 1
+      end,
+      del = function() end,
+      get = function()
+        return nil
+      end,
+    }
+
+    vim.ui.img = {
+      set = function()
+        return 1
+      end,
+      get = function()
+        return nil
+      end,
+      del = function() end,
+    }
+    image_backend.status = function()
+      return { available = true, name = "nvim" }
+    end
+    image_backend.get = function()
+      return backend, "nvim"
+    end
+    worker.request_batch = function(_, callback)
+      request_count = request_count + 1
+      callback({
+        {
+          error = nil,
+          result = {
+            width_px = 10,
+            height_px = 10,
+            png_path = "/tmp/render-latex-theme-test.png",
+            cache_key = "theme-test-" .. request_count,
+          },
+        },
+      }, nil)
+    end
+    viewport.visible_equations = function(_, indexed_equations)
+      return indexed_equations
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+
+    renderer.set_suppressed("cmdline", false)
+    renderer.set_suppressed("floating", false)
+    renderer.attach(buf)
+    vim.api.nvim_set_hl(0, "@markup.math", { fg = "#111111" })
+    renderer.render(buf)
+    vim.wait(100, function()
+      return request_count == 1
+    end)
+
+    vim.api.nvim_set_hl(0, "@markup.math", { fg = "#eeeeee" })
+    renderer.render(buf)
+    vim.wait(100, function()
+      return request_count == 2
+    end)
+
+    vim.api.nvim_set_hl(0, "@markup.math", previous_math)
+    worker.request_batch = previous_request_batch
+    viewport.visible_equations = previous_visible_equations
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    vim.fn.readblob = previous_readblob
+    vim.ui.img = previous_img
+
+    assert.are.equal(2, request_count)
+  end)
+
   it("tracks dirty edits for focused equations", function()
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_set_current_buf(buf)
@@ -1308,9 +1462,19 @@ end)
 
 describe("render_latex.viewport", function()
   it("computes each window range once when filtering visible equations", function()
+    local previous_win_findbuf = vim.fn.win_findbuf
+    local previous_win_is_valid = vim.api.nvim_win_is_valid
     local buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_set_current_buf(buf)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two", "three" })
+    vim.fn.win_findbuf = function(target)
+      if target == buf then
+        return { 101 }
+      end
+      return {}
+    end
+    vim.api.nvim_win_is_valid = function(winid)
+      return winid == 101
+    end
 
     local previous_viewport_range = viewport.viewport_range
     local calls = 0
@@ -1319,15 +1483,14 @@ describe("render_latex.viewport", function()
       return 0, 1
     end
 
-    local equations = {}
-    for index = 1, 50 do
-      equations[index] = { start_row = index - 1, end_row = index - 1 }
-    end
-    local ok, visible = pcall(viewport.visible_equations, buf, equations, {}, 0)
+    local ok, ranges = pcall(viewport.viewport_ranges, buf, {}, 0)
     viewport.viewport_range = previous_viewport_range
+    vim.fn.win_findbuf = previous_win_findbuf
+    vim.api.nvim_win_is_valid = previous_win_is_valid
 
     assert.is_true(ok)
     assert.are.equal(1, calls)
-    assert.are.equal(2, #visible)
+    assert.are.equal(1, #ranges)
+    assert.are.same({ top = 0, bottom = 1 }, ranges[1])
   end)
 end)
