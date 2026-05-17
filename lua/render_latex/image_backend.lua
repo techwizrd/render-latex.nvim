@@ -75,7 +75,8 @@ local function kitty_supported()
   if is_tmux() then
     return vim.fn.executable("tmux") == 1
   end
-  if vim.env.KITTY_WINDOW_ID ~= nil
+  if
+    vim.env.KITTY_WINDOW_ID ~= nil
     or vim.env.WEZTERM_EXECUTABLE ~= nil
     or (vim.env.TERM or ""):lower():find("kitty", 1, true) ~= nil
   then
