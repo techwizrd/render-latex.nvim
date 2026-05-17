@@ -1376,9 +1376,6 @@ describe("render_latex.renderer", function()
         },
       }, nil)
     end
-    viewport.visible_equations = function(_, indexed_equations)
-      return indexed_equations
-    end
     vim.fn.readblob = function()
       return "png"
     end
@@ -1423,7 +1420,6 @@ describe("render_latex.renderer", function()
 
     vim.api.nvim_set_hl(0, "@markup.math", previous_math)
     worker.request_batch = previous_request_batch
-    viewport.visible_equations = previous_visible_equations
     image_backend.status = previous_backend_status
     image_backend.get = previous_backend_get
     vim.fn.readblob = previous_readblob
@@ -1615,5 +1611,42 @@ describe("render_latex.viewport", function()
     assert.are.equal(1, calls)
     assert.are.equal(1, #ranges)
     assert.are.same({ top = 0, bottom = 1 }, ranges[1])
+  end)
+
+  it("hides equations inside closed folds from visible equation filtering", function()
+    local previous_win_findbuf = vim.fn.win_findbuf
+    local previous_win_is_valid = vim.api.nvim_win_is_valid
+    local previous_viewport_range = viewport.viewport_range
+    local previous_fold_closed = viewport.fold_closed
+    local buf = vim.api.nvim_create_buf(false, true)
+
+    vim.fn.win_findbuf = function(target)
+      if target == buf then
+        return { 101 }
+      end
+      return {}
+    end
+    vim.api.nvim_win_is_valid = function(winid)
+      return winid == 101
+    end
+    viewport.viewport_range = function()
+      return 0, 10
+    end
+    viewport.fold_closed = function(equation)
+      return equation.key == "folded"
+    end
+
+    local visible = viewport.visible_equations(buf, {
+      { start_row = 1, end_row = 3, key = "folded" },
+      { start_row = 5, end_row = 6, key = "visible" },
+    }, {}, 0)
+
+    vim.fn.win_findbuf = previous_win_findbuf
+    vim.api.nvim_win_is_valid = previous_win_is_valid
+    viewport.viewport_range = previous_viewport_range
+    viewport.fold_closed = previous_fold_closed
+
+    assert.are.equal(1, #visible)
+    assert.are.equal("visible", visible[1].key)
   end)
 end)

@@ -14,6 +14,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Added a rolling `unreleased` GitHub prerelease workflow for non-tag `main` pushes.
 - Requeued all visible buffers on `ColorScheme` so theme switches rerender visible equations automatically.
 - Optimized scrolling by adding a lightweight `WinScrolled` refresh path, coalescing repeated scroll events, and batching Kitty placement updates.
+- Added fold-aware visibility so equations inside closed folds stay hidden until the fold is opened again.
 
 ### Fixed
 

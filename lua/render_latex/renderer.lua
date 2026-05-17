@@ -608,10 +608,12 @@ end
 local function visible_equations_from_ranges(indexed_equations, ranges)
   local visible = {}
   for _, equation in ipairs(indexed_equations) do
-    for _, range in ipairs(ranges) do
-      if equation.end_row >= range.top and equation.start_row <= range.bottom then
-        visible[#visible + 1] = equation
-        break
+    if not Viewport.fold_closed(equation) then
+      for _, range in ipairs(ranges) do
+        if equation.end_row >= range.top and equation.start_row <= range.bottom then
+          visible[#visible + 1] = equation
+          break
+        end
       end
     end
   end

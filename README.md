@@ -171,14 +171,14 @@ This is an early release. The defaults are meant to be fast and friendly, but op
 
 Before the first stable release, I still want to:
 
-- [ ] Verify GitHub CI and release assets on Linux, macOS, and Windows.
-- [ ] Confirm `:RenderLatex install` works from a clean install.
-- [ ] Smoke-test the documented lazy.nvim and `vim.pack` setup paths.
-- [ ] Check whether downloaded workers hit Gatekeeper/quarantine issues on macOS.
+- [ ] Verify GitHub CI and release assets on Windows.
+- [x] Confirm `:RenderLatex install` works from a clean install.
+- [x] Smoke-test the documented lazy.nvim and `vim.pack` setup paths.
+- [x] Check whether downloaded workers hit Gatekeeper/quarantine issues on macOS.
 
 After that, the main things I want to explore are:
 
-- [ ] Folding support.
+- [x] Folding support.
 - [ ] An experimental mode for rendering inline display math.
 - [ ] SVG rendering, once Neovim or custom providers can handle it well.
 - [ ] Moving more render-queue logic into the Rust worker.

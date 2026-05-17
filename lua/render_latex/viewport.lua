@@ -2,6 +2,12 @@ local Config = require("render_latex.config")
 
 local M = {}
 
+---@param equation table
+---@return boolean
+function M.fold_closed(equation)
+  return vim.fn.foldclosed(equation.start_row + 1) ~= -1
+end
+
 ---@param line_count integer
 ---@return { disabled: boolean, prefetch: integer }
 function M.render_limits(line_count)
@@ -89,10 +95,12 @@ function M.visible_equations(bufnr, indexed_equations, viewport_state, prefetch)
   local ranges = M.viewport_ranges(bufnr, viewport_state, prefetch)
   local visible = {}
   for _, equation in ipairs(indexed_equations) do
-    for _, range in ipairs(ranges) do
-      if equation.end_row >= range.top and equation.start_row <= range.bottom then
-        visible[#visible + 1] = equation
-        break
+    if not M.fold_closed(equation) then
+      for _, range in ipairs(ranges) do
+        if equation.end_row >= range.top and equation.start_row <= range.bottom then
+          visible[#visible + 1] = equation
+          break
+        end
       end
     end
   end
