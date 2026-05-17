@@ -371,6 +371,7 @@ function M.clear_label(bufnr, ns, state, key)
     pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, mark_id)
     state.labels[key] = nil
   end
+  state.label_layouts[key] = nil
 end
 
 ---@param bufnr integer
@@ -386,6 +387,10 @@ function M.set_equation_label(bufnr, ns, state, equation, index)
 
   M.clear_label(bufnr, ns, state, equation.key)
   local label = Config.render.equation_label_format:format(index)
+  local layout = table.concat({ equation.start_row, style, label }, ":")
+  if state.labels[equation.key] ~= nil and state.label_layouts[equation.key] == layout then
+    return
+  end
   local opts = { priority = 240 }
 
   if style == "right" or style == "both" then
@@ -398,6 +403,7 @@ function M.set_equation_label(bufnr, ns, state, equation, index)
   end
 
   state.labels[equation.key] = vim.api.nvim_buf_set_extmark(bufnr, ns, equation.start_row, 0, opts)
+  state.label_layouts[equation.key] = layout
 end
 
 return M

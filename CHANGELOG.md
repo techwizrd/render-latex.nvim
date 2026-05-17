@@ -12,11 +12,14 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Made `:RenderLatex build` run asynchronously and refresh visible buffers through the same worker-ready path used by installs.
 - Switched long-running worker build and install commands to native Neovim progress messages.
 - Added a rolling `unreleased` GitHub prerelease workflow for non-tag `main` pushes.
+- Requeued all visible buffers on `ColorScheme` so theme switches rerender visible equations automatically.
+- Optimized scrolling by adding a lightweight `WinScrolled` refresh path, coalescing repeated scroll events, and batching Kitty placement updates.
 
 ### Fixed
 
 - Fixed Ghostty and other Kitty graphics-compatible terminals being reported as unsupported outside tmux.
 - Avoided noisy worker-unavailable warnings while a worker build is in progress.
+- Fixed repro configs to resolve the plugin root relative to `repro/common.lua` instead of using a machine-specific absolute path.
 
 ## 0.1.0-rc2 - 2026-05-16
 

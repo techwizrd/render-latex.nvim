@@ -62,7 +62,7 @@ describe("render_latex.detect", function()
   end)
 
   it("finds single-line bracket display math blocks", function()
-    local buf = vim.api.nvim_create_buf(false, true)
+    local buf = vim.api.nvim_create_buf(true, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
       "\\[ x + y \\]",
     })
@@ -920,6 +920,53 @@ describe("render_latex.setup", function()
     assert.are.same({ left, right }, attached)
     assert.are.same({ left, right }, queued)
   end)
+
+  it("uses the lightweight refresh path on WinScrolled", function()
+    local previous_scroll = renderer.scroll
+    local previous_queue = renderer.queue
+    local previous_attach = renderer.attach
+    local previous_suppression = renderer.suppression_status
+    local previous_set_suppressed = renderer.set_suppressed
+    local previous_has_popup = ui.has_popup_or_floating_windows
+    local previous_getcmdtype = vim.fn.getcmdtype
+    local scrolled = {}
+    local queued = {}
+
+    renderer.scroll = function(bufnr)
+      scrolled[#scrolled + 1] = bufnr
+    end
+    renderer.queue = function(bufnr)
+      queued[#queued + 1] = bufnr
+    end
+    renderer.attach = function() end
+    renderer.suppression_status = function()
+      return { cmdline = false, floating = false }
+    end
+    renderer.set_suppressed = function() end
+    ui.has_popup_or_floating_windows = function()
+      return false
+    end
+    vim.fn.getcmdtype = function()
+      return ""
+    end
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].filetype = "markdown"
+    render_latex.setup({ install = { auto = false } })
+
+    vim.api.nvim_exec_autocmds("WinScrolled", { buffer = buf, modeline = false })
+
+    renderer.scroll = previous_scroll
+    renderer.queue = previous_queue
+    renderer.attach = previous_attach
+    renderer.suppression_status = previous_suppression
+    renderer.set_suppressed = previous_set_suppressed
+    ui.has_popup_or_floating_windows = previous_has_popup
+    vim.fn.getcmdtype = previous_getcmdtype
+
+    assert.are.same({ buf }, scrolled)
+    assert.are.same({}, queued)
+  end)
 end)
 
 describe("render_latex.ui", function()
@@ -1202,6 +1249,41 @@ describe("render_latex.image_backend", function()
   end)
 end)
 
+describe("render_latex.image_backends.kitty", function()
+  it("batches placement and deletion updates into one ui send", function()
+    local previous_send = vim.api.nvim_ui_send
+    local previous_tmux = vim.env.TMUX
+    local previous_count = vim.env.TMUX_NEST_COUNT
+    local sent = {}
+
+    package.loaded["render_latex.image_backends.kitty"] = nil
+    local kitty = require("render_latex.image_backends.kitty")
+
+    vim.api.nvim_ui_send = function(data)
+      sent[#sent + 1] = data
+    end
+    vim.env.TMUX = nil
+    vim.env.TMUX_NEST_COUNT = nil
+
+    local id = kitty.set("png", { row = 1, col = 1, width = 2, height = 2 })
+    assert.are.equal(2, #sent)
+
+    kitty.begin_batch()
+    kitty.set(id, { row = 2, col = 3, width = 2, height = 2 })
+    kitty.del(id)
+    assert.are.equal(2, #sent)
+    kitty.flush_batch()
+
+    vim.api.nvim_ui_send = previous_send
+    vim.env.TMUX = previous_tmux
+    vim.env.TMUX_NEST_COUNT = previous_count
+
+    assert.are.equal(3, #sent)
+    assert.is_truthy(sent[3]:find("a=p", 1, true))
+    assert.is_truthy(sent[3]:find("a=d", 1, true))
+  end)
+end)
+
 describe("render_latex.install", function()
   it("resolves configured worker path", function()
     config.setup({ worker = { bin = "/tmp/render-latex-worker-test" } })
@@ -1248,7 +1330,9 @@ describe("render_latex.renderer", function()
     local previous_backend_status = image_backend.status
     local previous_backend_get = image_backend.get
     local previous_request_batch = worker.request_batch
-    local previous_visible_equations = viewport.visible_equations
+    local previous_detect_scan = detect.scan
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
     local previous_readblob = vim.fn.readblob
     local previous_math = vim.api.nvim_get_hl(0, { name = "@markup.math", link = false })
     local request_count = 0
@@ -1298,11 +1382,29 @@ describe("render_latex.renderer", function()
     vim.fn.readblob = function()
       return "png"
     end
+    detect.scan = function()
+      return {
+        {
+          key = "display:1:3",
+          start_row = 0,
+          end_row = 2,
+          text = "x^2",
+          quoted = false,
+        },
+      }
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 20
+    end
 
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_set_current_buf(buf)
     vim.bo[buf].filetype = "markdown"
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+    vim.api.nvim_win_set_cursor(0, { 4, 0 })
 
     renderer.set_suppressed("cmdline", false)
     renderer.set_suppressed("floating", false)
@@ -1328,6 +1430,27 @@ describe("render_latex.renderer", function()
     vim.ui.img = previous_img
 
     assert.are.equal(2, request_count)
+  end)
+
+  it("coalesces repeated scroll refresh requests", function()
+    local previous_refresh_visible = renderer.refresh_visible
+    local calls = 0
+    local buf = vim.api.nvim_create_buf(true, true)
+
+    renderer.refresh_visible = function(target)
+      assert.are.equal(buf, target)
+      calls = calls + 1
+    end
+
+    renderer.scroll(buf)
+    renderer.scroll(buf)
+    renderer.scroll(buf)
+    vim.wait(100, function()
+      return calls == 1
+    end)
+    renderer.refresh_visible = previous_refresh_visible
+
+    assert.are.equal(1, calls)
   end)
 
   it("tracks dirty edits for focused equations", function()

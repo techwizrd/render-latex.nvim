@@ -6,6 +6,8 @@ local state = {}
 local next_counter = 30
 local pid_bits = 10
 local cached_pid = nil
+local batch_depth = 0
+local batch_queue = {}
 
 local function current_pid_bits()
   if cached_pid ~= nil then
@@ -58,6 +60,14 @@ local function send(data)
   vim.api.nvim_ui_send(tmux_wrap(data))
 end
 
+local function send_batched(data)
+  if batch_depth > 0 then
+    batch_queue[#batch_queue + 1] = data
+    return
+  end
+  send(data)
+end
+
 local function transmit(img_id, data)
   local chunk_size = 4096
   local base64_data = vim.base64.encode(data)
@@ -105,7 +115,7 @@ local function place(img_id, placement_id, opts)
     "\0278",
     "\027[?25h",
   })
-  send(cursor)
+  send_batched(cursor)
 end
 
 function M.set(data_or_id, opts)
@@ -140,7 +150,7 @@ function M.del(id)
     local has_ids = next(state) ~= nil
     state = {}
     if has_ids then
-      send(seq({ a = "d", d = "A", q = "2" }))
+      send_batched(seq({ a = "d", d = "A", q = "2" }))
     end
     return has_ids
   end
@@ -150,9 +160,28 @@ function M.del(id)
     return false
   end
 
-  send(seq({ a = "d", d = "i", i = entry.img_id, q = "2" }))
+  send_batched(seq({ a = "d", d = "i", i = entry.img_id, q = "2" }))
   state[id] = nil
   return true
+end
+
+function M.begin_batch()
+  batch_depth = batch_depth + 1
+end
+
+function M.flush_batch()
+  if batch_depth == 0 then
+    return
+  end
+
+  batch_depth = batch_depth - 1
+  if batch_depth > 0 or #batch_queue == 0 then
+    return
+  end
+
+  local payload = table.concat(batch_queue)
+  batch_queue = {}
+  send(payload)
 end
 
 function M.supported()

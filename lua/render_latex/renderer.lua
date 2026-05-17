@@ -38,7 +38,10 @@ end
 ---@field delayed_render table<string, boolean>
 ---@field placeholders table<string, integer>
 ---@field labels table<string, integer>
+---@field mark_layouts table<string, string>
+---@field label_layouts table<string, string>
 ---@field viewports table<integer, { top: integer, bottom: integer, direction: 'up'|'down'|'still' }>
+---@field scroll_scheduled boolean
 ---@field timer any
 
 ---@type table<integer, render_latex.BufferState>
@@ -81,7 +84,10 @@ local function get_buffer_state(bufnr)
     delayed_render = {},
     placeholders = {},
     labels = {},
+    mark_layouts = {},
+    label_layouts = {},
     viewports = {},
+    scroll_scheduled = false,
     timer = nil,
   }
   buffers[bufnr] = state
@@ -198,6 +204,8 @@ local function render_payload(equation, opts)
   }
 end
 
+local with_backend_batch
+
 local function clear_images(bufnr)
   local state = buffers[bufnr]
   if state == nil then
@@ -211,11 +219,13 @@ local function clear_images(bufnr)
     return
   end
 
-  for _, image_ids in pairs(state.images) do
-    for _, image_id in pairs(image_ids) do
-      pcall(backend.del, image_id)
+  with_backend_batch(backend, function()
+    for _, image_ids in pairs(state.images) do
+      for _, image_id in pairs(image_ids) do
+        pcall(backend.del, image_id)
+      end
     end
-  end
+  end)
   state.images = {}
   state.placements = {}
 end
@@ -225,9 +235,11 @@ local function clear_window_images(state, winid)
   if image_ids ~= nil then
     local backend = ImageBackend.get()
     if backend ~= nil then
-      for _, image_id in pairs(image_ids) do
-        pcall(backend.del, image_id)
-      end
+      with_backend_batch(backend, function()
+        for _, image_id in pairs(image_ids) do
+          pcall(backend.del, image_id)
+        end
+      end)
     end
   end
   state.images[winid] = nil
@@ -242,6 +254,8 @@ local function clear_marks(bufnr)
     return
   end
   Annotations.clear_marks(bufnr, Config.ns, state)
+  state.mark_layouts = {}
+  state.label_layouts = {}
 end
 
 local function clear_equation_display(bufnr, key)
@@ -255,22 +269,25 @@ local function clear_equation_display(bufnr, key)
     pcall(vim.api.nvim_buf_del_extmark, bufnr, Config.ns, mark_id)
     state.marks[key] = nil
   end
+  state.mark_layouts[key] = nil
   Annotations.clear_placeholder(bufnr, Config.ns, state, key)
   Annotations.clear_label(bufnr, Config.ns, state, key)
 
   local backend = ImageBackend.get()
-  for winid, image_ids in pairs(state.images) do
-    local image_id = image_ids[key]
-    if image_id ~= nil then
-      if backend ~= nil then
-        pcall(backend.del, image_id)
+  with_backend_batch(backend, function()
+    for winid, image_ids in pairs(state.images) do
+      local image_id = image_ids[key]
+      if image_id ~= nil then
+        if backend ~= nil then
+          pcall(backend.del, image_id)
+        end
+        image_ids[key] = nil
       end
-      image_ids[key] = nil
+      if state.placements[winid] ~= nil then
+        state.placements[winid][key] = nil
+      end
     end
-    if state.placements[winid] ~= nil then
-      state.placements[winid][key] = nil
-    end
-  end
+  end)
 end
 
 local function cancel_delayed_render(state, key)
@@ -359,7 +376,14 @@ local function prune_stale_state(state, indexed_equations)
     active[equation.key] = true
   end
 
-  for _, map in ipairs({ state.metadata, state.failures, state.manual_raw, state.dirty }) do
+  for _, map in ipairs({
+    state.metadata,
+    state.failures,
+    state.manual_raw,
+    state.dirty,
+    state.mark_layouts,
+    state.label_layouts,
+  }) do
     for key, _ in pairs(map) do
       if not active[key] then
         map[key] = nil
@@ -385,6 +409,7 @@ function M.clear(bufnr)
     state.failures = {}
     state.manual_raw = {}
     state.viewports = {}
+    state.scroll_scheduled = false
     for key, _ in pairs(state.exit_timers) do
       cancel_delayed_render(state, key)
     end
@@ -410,6 +435,7 @@ function M.clear_all()
     state.failures = {}
     state.manual_raw = {}
     state.viewports = {}
+    state.scroll_scheduled = false
     for key, _ in pairs(state.exit_timers) do
       cancel_delayed_render(state, key)
     end
@@ -429,6 +455,7 @@ function M.hide_all()
     end
     state.images = {}
     state.placements = {}
+    state.scroll_scheduled = false
   end
 end
 
@@ -449,16 +476,13 @@ local function active_focus_counts(focused_keys)
   return active
 end
 
-local function sync_focus(bufnr, indexed_equations)
+local function sync_focus(bufnr, indexed_equations, snapshot)
   local state = get_buffer_state(bufnr)
   local next_focused_keys = {}
-  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-    if Util.win_is_valid(winid) then
-      local cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1
-      local focused = find_equation_at_row(indexed_equations, cursor_row)
-      if focused ~= nil then
-        next_focused_keys[winid] = focused.key
-      end
+  for _, winid in ipairs(snapshot.winids) do
+    local focused = find_equation_at_row(indexed_equations, snapshot.windows[winid].cursor_row)
+    if focused ~= nil then
+      next_focused_keys[winid] = focused.key
     end
   end
 
@@ -508,6 +532,11 @@ local function ensure_mark(bufnr, equation, meta)
   local state = get_buffer_state(bufnr)
   local source_lines = equation.end_row - equation.start_row + 1
   local reserved = math.max(0, meta.height_cells - source_lines)
+  local layout =
+    table.concat({ equation.start_row, equation.end_row, reserved, Config.conceal and 1 or 0 }, ":")
+  if state.marks[equation.key] ~= nil and state.mark_layouts[equation.key] == layout then
+    return
+  end
   local virt_lines = {}
 
   for _ = 1, reserved do
@@ -527,9 +556,69 @@ local function ensure_mark(bufnr, equation, meta)
       hl_mode = "combine",
       priority = 250,
     })
+  state.mark_layouts[equation.key] = layout
 end
 
-local function update_image(bufnr, winid, equation, meta)
+local function collect_window_snapshot(bufnr, viewport_state, prefetch)
+  local snapshot = {
+    winids = {},
+    ranges = {},
+    windows = {},
+  }
+
+  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if Util.win_is_valid(winid) then
+      local top, bottom = Viewport.viewport_range(viewport_state, winid, prefetch)
+      local text_top, text_bottom = Viewport.visible_text_bounds(winid)
+      snapshot.winids[#snapshot.winids + 1] = winid
+      snapshot.ranges[#snapshot.ranges + 1] = { top = top, bottom = bottom }
+      snapshot.windows[winid] = {
+        width = vim.api.nvim_win_get_width(winid),
+        text_top = text_top,
+        text_bottom = text_bottom,
+        cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1,
+      }
+    end
+  end
+
+  return snapshot
+end
+
+with_backend_batch = function(backend, callback)
+  local has_batch = backend ~= nil
+    and type(backend.begin_batch) == "function"
+    and type(backend.flush_batch) == "function"
+  if has_batch then
+    backend.begin_batch()
+  end
+
+  local ok, result = pcall(callback)
+
+  if has_batch then
+    backend.flush_batch()
+  end
+
+  if not ok then
+    error(result)
+  end
+
+  return result
+end
+
+local function visible_equations_from_ranges(indexed_equations, ranges)
+  local visible = {}
+  for _, equation in ipairs(indexed_equations) do
+    for _, range in ipairs(ranges) do
+      if equation.end_row >= range.top and equation.start_row <= range.bottom then
+        visible[#visible + 1] = equation
+        break
+      end
+    end
+  end
+  return visible
+end
+
+local function update_image(bufnr, winid, equation, meta, backend, window)
   if not Util.win_is_valid(winid) then
     return false
   end
@@ -539,7 +628,8 @@ local function update_image(bufnr, winid, equation, meta)
     return false
   end
 
-  local text_top, text_bottom = Viewport.visible_text_bounds(winid)
+  local text_top = window.text_top
+  local text_bottom = window.text_bottom
   if text_top == nil then
     return false
   end
@@ -554,7 +644,7 @@ local function update_image(bufnr, winid, equation, meta)
   state.images[winid] = state.images[winid] or {}
   state.placements[winid] = state.placements[winid] or {}
 
-  local width = vim.api.nvim_win_get_width(winid)
+  local width = window.width
   local col = position.col + math.max(0, math.floor((width - meta.width_cells) / 2))
   local opts = {
     row = row,
@@ -564,8 +654,8 @@ local function update_image(bufnr, winid, equation, meta)
     zindex = Config.image.zindex,
   }
   local placement_fingerprint = table.concat({ opts.row, opts.col, opts.width, opts.height }, ":")
-  local backend, _, reason = ImageBackend.get()
   if backend == nil then
+    local _, _, reason = ImageBackend.get()
     if last_backend_warning ~= reason then
       last_backend_warning = reason
       Util.warn(reason or "No image backend is available")
@@ -610,6 +700,90 @@ local function update_image(bufnr, winid, equation, meta)
   end
 
   return true
+end
+
+local function cleanup_inactive(state, bufnr, active, active_images, backend)
+  for key, mark_id in pairs(state.marks) do
+    if not active[key] then
+      pcall(vim.api.nvim_buf_del_extmark, bufnr, Config.ns, mark_id)
+      state.marks[key] = nil
+      state.mark_layouts[key] = nil
+    end
+  end
+
+  for key, mark_id in pairs(state.labels) do
+    if not active[key] then
+      pcall(vim.api.nvim_buf_del_extmark, bufnr, Config.ns, mark_id)
+      state.labels[key] = nil
+      state.label_layouts[key] = nil
+    end
+  end
+
+  for winid, image_ids in pairs(state.images) do
+    if not Util.win_is_valid(winid) then
+      clear_window_images(state, winid)
+    else
+      local keep = active_images[winid] or {}
+      for key, image_id in pairs(image_ids) do
+        if not keep[key] then
+          if backend ~= nil then
+            pcall(backend.del, image_id)
+          end
+          image_ids[key] = nil
+          state.placements[winid][key] = nil
+        end
+      end
+    end
+  end
+end
+
+local function update_existing_visible(bufnr, indexed_equations, snapshot)
+  local state = get_buffer_state(bufnr)
+  local active = {}
+  local active_images = {}
+  local visible_index = 0
+  local option_cache = {}
+  local backend_status = ImageBackend.status()
+  local backend = backend_status.available and ImageBackend.get() or nil
+  local needs_render = false
+  local focused = active_focus_counts(state.focused_keys)
+
+  with_backend_batch(backend, function()
+    for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
+      visible_index = visible_index + 1
+      active[equation.key] = true
+      local meta = state.metadata[equation.key]
+      if focused[equation.key] then
+        clear_equation_display(bufnr, equation.key)
+      elseif state.manual_raw[equation.key] or state.delayed_render[equation.key] then
+        clear_equation_display(bufnr, equation.key)
+      elseif
+        meta == nil
+        or meta.render_fingerprint
+          ~= render_fingerprint(cached_render_options(option_cache, equation))
+      then
+        needs_render = true
+      elseif backend == nil then
+        clear_equation_display(bufnr, equation.key)
+        if last_backend_warning ~= backend_status.reason then
+          last_backend_warning = backend_status.reason
+          Util.warn(backend_status.reason or "No image backend is available")
+        end
+        needs_render = true
+      else
+        ensure_mark(bufnr, equation, meta)
+        Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
+        for _, winid in ipairs(snapshot.winids) do
+          if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
+            active_images[winid] = active_images[winid] or {}
+            active_images[winid][equation.key] = true
+          end
+        end
+      end
+    end
+    cleanup_inactive(state, bufnr, active, active_images, backend)
+  end)
+  return needs_render
 end
 
 local function request_renders(bufnr, equations_to_render)
@@ -726,83 +900,110 @@ function M.render(bufnr)
   local indexed_equations = equations(bufnr)
   prune_stale_state(state, indexed_equations)
   Annotations.render_inline_fallback(bufnr, Config.ns, state, inline_ranges(bufnr))
-  local focused_keys = sync_focus(bufnr, indexed_equations)
+  local snapshot = collect_window_snapshot(bufnr, state.viewports, limits.prefetch)
+  local focused_keys = sync_focus(bufnr, indexed_equations, snapshot)
   local active = {}
   local active_images = {}
   local backend_status = ImageBackend.status()
+  local backend = backend_status.available and ImageBackend.get() or nil
   local batch = {}
   local visible_index = 0
   local option_cache = {}
 
-  for _, equation in
-    ipairs(Viewport.visible_equations(bufnr, indexed_equations, state.viewports, limits.prefetch))
-  do
-    visible_index = visible_index + 1
-    active[equation.key] = true
-    local meta = state.metadata[equation.key]
-    if focused_keys[equation.key] then
-      clear_equation_display(bufnr, equation.key)
-    elseif state.manual_raw[equation.key] then
-      clear_equation_display(bufnr, equation.key)
-    elseif state.delayed_render[equation.key] then
-      clear_equation_display(bufnr, equation.key)
-    elseif not backend_status.available then
-      clear_equation_display(bufnr, equation.key)
-      if last_backend_warning ~= backend_status.reason then
-        last_backend_warning = backend_status.reason
-        Util.warn(backend_status.reason or "No image backend is available")
-      end
-    elseif
-      meta == nil
-      or meta.render_fingerprint
-        ~= render_fingerprint(cached_render_options(option_cache, equation))
-    then
-      batch[#batch + 1] = equation
-    else
-      ensure_mark(bufnr, equation, meta)
-      Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
-      for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-        if update_image(bufnr, winid, equation, meta) then
-          active_images[winid] = active_images[winid] or {}
-          active_images[winid][equation.key] = true
+  with_backend_batch(backend, function()
+    for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
+      visible_index = visible_index + 1
+      active[equation.key] = true
+      local meta = state.metadata[equation.key]
+      if focused_keys[equation.key] then
+        clear_equation_display(bufnr, equation.key)
+      elseif state.manual_raw[equation.key] then
+        clear_equation_display(bufnr, equation.key)
+      elseif state.delayed_render[equation.key] then
+        clear_equation_display(bufnr, equation.key)
+      elseif not backend_status.available then
+        clear_equation_display(bufnr, equation.key)
+        if last_backend_warning ~= backend_status.reason then
+          last_backend_warning = backend_status.reason
+          Util.warn(backend_status.reason or "No image backend is available")
+        end
+      elseif
+        meta == nil
+        or meta.render_fingerprint
+          ~= render_fingerprint(cached_render_options(option_cache, equation))
+      then
+        batch[#batch + 1] = equation
+      else
+        ensure_mark(bufnr, equation, meta)
+        Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
+        for _, winid in ipairs(snapshot.winids) do
+          if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
+            active_images[winid] = active_images[winid] or {}
+            active_images[winid][equation.key] = true
+          end
         end
       end
     end
-  end
+    cleanup_inactive(state, bufnr, active, active_images, backend)
+  end)
 
   request_renders(bufnr, batch)
+end
 
-  for key, mark_id in pairs(state.marks) do
-    if not active[key] then
-      pcall(vim.api.nvim_buf_del_extmark, bufnr, Config.ns, mark_id)
-      state.marks[key] = nil
-    end
+---@param bufnr integer
+function M.refresh_visible(bufnr)
+  if not Util.buf_is_valid(bufnr) then
+    return
+  end
+  if is_suppressed() then
+    return
   end
 
-  for key, mark_id in pairs(state.labels) do
-    if not active[key] then
-      pcall(vim.api.nvim_buf_del_extmark, bufnr, Config.ns, mark_id)
-      state.labels[key] = nil
-    end
+  local limits = Viewport.render_limits(vim.api.nvim_buf_line_count(bufnr))
+  if
+    not Config.enabled
+    or not Config.is_filetype_supported(vim.bo[bufnr].filetype)
+    or limits.disabled
+  then
+    return
+  end
+  if not Config.should_render_mode(vim.api.nvim_get_mode().mode) then
+    return
   end
 
-  for winid, image_ids in pairs(state.images) do
-    if not Util.win_is_valid(winid) then
-      clear_window_images(state, winid)
-    else
-      local keep = active_images[winid] or {}
-      for key, image_id in pairs(image_ids) do
-        if not keep[key] then
-          local backend = ImageBackend.get()
-          if backend ~= nil then
-            pcall(backend.del, image_id)
-          end
-          image_ids[key] = nil
-          state.placements[winid][key] = nil
-        end
-      end
-    end
+  local state = get_buffer_state(bufnr)
+  local indexed_equations = equations(bufnr)
+  prune_stale_state(state, indexed_equations)
+  local snapshot = collect_window_snapshot(bufnr, state.viewports, limits.prefetch)
+  if #snapshot.winids == 0 then
+    return
   end
+
+  if update_existing_visible(bufnr, indexed_equations, snapshot) then
+    M.queue(bufnr)
+  end
+end
+
+---@param bufnr integer
+function M.scroll(bufnr)
+  if not Util.buf_is_valid(bufnr) then
+    return
+  end
+
+  local state = get_buffer_state(bufnr)
+  if state.scroll_scheduled then
+    return
+  end
+
+  state.scroll_scheduled = true
+  vim.schedule(function()
+    local current = buffers[bufnr]
+    if current == nil then
+      return
+    end
+    current.scroll_scheduled = false
+    M.refresh_visible(bufnr)
+  end)
 end
 
 ---@param bufnr integer

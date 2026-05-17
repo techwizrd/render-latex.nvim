@@ -56,7 +56,6 @@ local function register_autocmds()
     "CursorMovedI",
     "CompleteChanged",
     "CompleteDone",
-    "WinScrolled",
     "WinResized",
   }, {
     group = Config.augroup,
@@ -79,6 +78,20 @@ local function register_autocmds()
     callback = function()
       if update_transient_ui_suppression(false) then
         queue_visible_buffers()
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = Config.augroup,
+    callback = function(args)
+      local bufnr = args.buf or vim.api.nvim_get_current_buf()
+      local allowed = update_transient_ui_suppression(false)
+      if should_attach(bufnr) then
+        Renderer.attach(bufnr)
+        if allowed then
+          Renderer.scroll(bufnr)
+        end
       end
     end,
   })
