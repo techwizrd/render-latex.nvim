@@ -16,7 +16,7 @@ local worker = require("render_latex.worker")
 
 describe("render_latex.detect", function()
   it("finds $$ display math blocks", function()
-    local buf = vim.api.nvim_create_buf(true, true)
+    local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
       "before",
       "$$",
@@ -91,7 +91,7 @@ describe("render_latex.detect", function()
   end)
 
   it("keeps shorter matching markers inside longer fenced code blocks", function()
-    local buf = vim.api.nvim_create_buf(false, true)
+    local buf = vim.api.nvim_create_buf(true, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
       "````",
       "```",
@@ -177,6 +177,8 @@ describe("render_latex.detect", function()
 
     assert.are.equal(0, #equations)
     assert.are.equal(2, #inline)
+    assert.is_true(inline[1].in_table)
+    assert.is_false(inline[2].in_table)
   end)
 
   it("ignores math inside Obsidian comments", function()
@@ -430,6 +432,71 @@ describe("render_latex.annotations", function()
     assert.is_true(conceals["π"])
     assert.is_true(conceals["≤"])
     assert.is_true(conceals["∈"])
+  end)
+
+  it("pads concealed inline math inside markdown tables", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local raw_row = [[| row | $x \in A$ |]]
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "| Item | Math |",
+      "| --- | --- |",
+      raw_row,
+    })
+    local ns = vim.api.nvim_create_namespace("render-latex-test-table-padding")
+    local state = { inline_marks = {} }
+
+    annotations.render_inline_fallback(buf, ns, state)
+    local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+    local padding = nil
+    local conceals = {}
+    for _, mark in ipairs(marks) do
+      if mark[4].virt_text_pos == "inline" then
+        padding = mark
+      end
+      if mark[4].conceal ~= nil then
+        conceals[mark[4].conceal] = true
+      end
+    end
+
+    assert.is_truthy(padding)
+    assert.are.equal(2, padding[2])
+    assert.are.equal(4, vim.fn.strdisplaywidth(padding[4].virt_text[1][1]))
+    assert.are.equal(
+      vim.fn.strdisplaywidth(raw_row),
+      vim.fn.strdisplaywidth("| row | x ∈ A" .. padding[4].virt_text[1][1] .. " |")
+    )
+    assert.is_true(conceals[""])
+    assert.is_true(conceals["∈"])
+  end)
+
+  it("respects disabled inline symbols when padding table math", function()
+    config.setup({ render = { inline_symbols = false } })
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "| Item | Math |",
+      "| --- | --- |",
+      [[| row | $x \in A$ |]],
+    })
+    local ns = vim.api.nvim_create_namespace("render-latex-test-table-padding-no-symbols")
+    local state = { inline_marks = {} }
+
+    annotations.render_inline_fallback(buf, ns, state)
+    local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+    local padding = nil
+    local symbol_conceals = 0
+    for _, mark in ipairs(marks) do
+      if mark[4].virt_text_pos == "inline" then
+        padding = mark
+      end
+      if mark[4].conceal ~= nil and mark[4].conceal ~= "" then
+        symbol_conceals = symbol_conceals + 1
+      end
+    end
+
+    assert.is_truthy(padding)
+    assert.are.equal(2, vim.fn.strdisplaywidth(padding[4].virt_text[1][1]))
+    assert.are.equal(0, symbol_conceals)
   end)
 
   it("conceals broader inline math symbols", function()
@@ -1397,7 +1464,7 @@ describe("render_latex.renderer", function()
       return 1, 20
     end
 
-    local buf = vim.api.nvim_create_buf(false, true)
+    local buf = vim.api.nvim_create_buf(true, true)
     vim.api.nvim_set_current_buf(buf)
     vim.bo[buf].filetype = "markdown"
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
@@ -1420,6 +1487,7 @@ describe("render_latex.renderer", function()
 
     vim.api.nvim_set_hl(0, "@markup.math", previous_math)
     worker.request_batch = previous_request_batch
+    detect.scan = previous_detect_scan
     image_backend.status = previous_backend_status
     image_backend.get = previous_backend_get
     vim.fn.readblob = previous_readblob

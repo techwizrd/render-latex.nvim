@@ -169,11 +169,8 @@ local function set_inline_conceal(bufnr, ns, state, row, start_col, end_col, rep
     })
 end
 
-local function set_inline_symbol_marks(bufnr, ns, state, item)
-  if not Config.render.inline_symbols then
-    return
-  end
-
+local function inline_symbol_replacements(item)
+  local replacements = {}
   local text = item.text
   local index = 1
   while index <= #text do
@@ -196,33 +193,84 @@ local function set_inline_symbol_marks(bufnr, ns, state, item)
     if script_start ~= nil and (command_start == nil or script_start < command_start) then
       local replacement = marker == "^" and superscripts[value] or subscripts[value]
       if replacement ~= nil then
-        set_inline_conceal(
-          bufnr,
-          ns,
-          state,
-          item.row,
-          item.content_start_col + script_start - 1,
-          item.content_start_col + script_end,
-          replacement
-        )
+        replacements[#replacements + 1] = {
+          start_col = script_start,
+          end_col = script_end,
+          replacement = replacement,
+        }
       end
       index = script_end + 1
     else
       local replacement = inline_symbols[name]
       if replacement ~= nil then
-        set_inline_conceal(
-          bufnr,
-          ns,
-          state,
-          item.row,
-          item.content_start_col + command_start - 1,
-          item.content_start_col + command_end,
-          replacement
-        )
+        replacements[#replacements + 1] = {
+          start_col = command_start,
+          end_col = command_end,
+          replacement = replacement,
+        }
       end
       index = command_end + 1
     end
   end
+  return replacements
+end
+
+local function set_inline_symbol_marks(bufnr, ns, state, item, replacements)
+  if not Config.render.inline_symbols then
+    return
+  end
+
+  for _, range in ipairs(replacements) do
+    set_inline_conceal(
+      bufnr,
+      ns,
+      state,
+      item.row,
+      item.content_start_col + range.start_col - 1,
+      item.content_start_col + range.end_col,
+      range.replacement
+    )
+  end
+end
+
+local function rendered_inline_width(item, replacements)
+  local width = 0
+  local index = 1
+  for _, range in ipairs(replacements) do
+    width = width + vim.fn.strdisplaywidth(item.text:sub(index, range.start_col - 1))
+    width = width + vim.fn.strdisplaywidth(range.replacement)
+    index = range.end_col + 1
+  end
+  width = width + vim.fn.strdisplaywidth(item.text:sub(index))
+  return width
+end
+
+local function inline_delimiters(item)
+  if item.delimiter == "$" then
+    return "$", "$"
+  end
+  return "\\(", "\\)"
+end
+
+local function set_inline_table_padding(bufnr, ns, state, item, replacements)
+  if not item.in_table then
+    return
+  end
+
+  local opening, closing = inline_delimiters(item)
+  local raw_width = vim.fn.strdisplaywidth(opening .. item.text .. closing)
+  local rendered_width = rendered_inline_width(item, replacements)
+  local padding = raw_width - rendered_width
+  if padding <= 0 then
+    return
+  end
+
+  state.inline_marks[#state.inline_marks + 1] =
+    vim.api.nvim_buf_set_extmark(bufnr, ns, item.row, item.end_col, {
+      virt_text = { { (" "):rep(padding), "@markup.math" } },
+      virt_text_pos = "inline",
+      priority = 229,
+    })
 end
 
 ---@param bufnr integer
@@ -331,7 +379,11 @@ function M.render_inline_fallback(bufnr, ns, state, ranges)
       })
 
     if not reveal then
-      set_inline_symbol_marks(bufnr, ns, state, item)
+      local replacements = Config.render.inline_symbols and inline_symbol_replacements(item) or {}
+      set_inline_symbol_marks(bufnr, ns, state, item, replacements)
+      if mode == "conceal" then
+        set_inline_table_padding(bufnr, ns, state, item, replacements)
+      end
     end
   end
 end

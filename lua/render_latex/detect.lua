@@ -207,11 +207,60 @@ local function ignored_rows(lines)
   return rows
 end
 
+local function pipe_table_delimiter(line)
+  local trimmed = vim.trim(line)
+  if not trimmed:find("|", 1, true) then
+    return false
+  end
+
+  trimmed = trimmed:gsub("^|", ""):gsub("|$", "")
+  local cells = 0
+  for cell in trimmed:gmatch("([^|]+)") do
+    cells = cells + 1
+    local value = vim.trim(cell)
+    if not value:match("^:?-+:?$") or not value:match("---") then
+      return false
+    end
+  end
+  return cells > 0
+end
+
+local function pipe_table_rows(lines, ignored)
+  local rows = {}
+  for index, line in ipairs(lines) do
+    if not ignored[index] and pipe_table_delimiter(line) then
+      local start_index = index - 1
+      while start_index >= 1 do
+        local current = lines[start_index]
+        if ignored[start_index] or not current:find("|", 1, true) then
+          break
+        end
+        rows[start_index] = true
+        start_index = start_index - 1
+      end
+
+      rows[index] = true
+      local end_index = index + 1
+      while end_index <= #lines do
+        local current = lines[end_index]
+        if ignored[end_index] or not current:find("|", 1, true) then
+          break
+        end
+        rows[end_index] = true
+        end_index = end_index + 1
+      end
+    end
+  end
+  return rows
+end
+
 local function scan_context(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local ignored = ignored_rows(lines)
   return {
     lines = lines,
-    ignored = ignored_rows(lines),
+    ignored = ignored,
+    table_rows = pipe_table_rows(lines, ignored),
   }
 end
 
@@ -490,7 +539,7 @@ local function next_inline_delimiter(line, col)
   return nil, nil, nil
 end
 
-local function inline_item(line, row, open_start, close_start, open_delim, close_delim)
+local function inline_item(line, row, open_start, close_start, open_delim, close_delim, in_table)
   local content_start_col = open_start - 1 + #open_delim
   local content_end_col = close_start - 1
   return {
@@ -503,6 +552,7 @@ local function inline_item(line, row, open_start, close_start, open_delim, close
     end_col = close_start + #close_delim - 1,
     text = line:sub(open_start + #open_delim, close_start - 1),
     delimiter = open_delim == "$" and "$" or "\\(",
+    in_table = in_table,
   }
 end
 
@@ -534,8 +584,15 @@ local function inline_items_in_range(context, start_row, end_row)
             if
               valid_inline_bounds(line, start_col, end_col, open_delim, close_delim, code_ranges)
             then
-              items[#items + 1] =
-                inline_item(line, row, start_col, end_col, open_delim, close_delim)
+              items[#items + 1] = inline_item(
+                line,
+                row,
+                start_col,
+                end_col,
+                open_delim,
+                close_delim,
+                context.table_rows[row] == true
+              )
             end
             col = end_col + #close_delim
           else
