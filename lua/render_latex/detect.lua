@@ -61,10 +61,14 @@ local function math_block_lines(lines)
   return block
 end
 
+local function equation_key(start_row, end_row, text)
+  return Util.sha256(("%d:%d:%s"):format(start_row, end_row, text))
+end
+
 local function finalize(lines, start_row, end_row, delimiter)
   local text = normalize_text(table.concat(math_block_lines(lines), "\n"))
   return {
-    key = Util.sha256(("%d:%d:%s"):format(start_row, end_row, text)),
+    key = equation_key(start_row, end_row, text),
     start_row = start_row,
     end_row = end_row,
     text = text,
@@ -77,7 +81,7 @@ end
 local function finalize_text(text, start_row, end_row, delimiter, quoted)
   local normalized = normalize_text(text)
   return {
-    key = Util.sha256(("%d:%d:%s"):format(start_row, end_row, normalized)),
+    key = equation_key(start_row, end_row, normalized),
     start_row = start_row,
     end_row = end_row,
     text = normalized,
@@ -680,24 +684,37 @@ end
 ---@return table[]
 function M.update(equations, bufnr, start_row, old_end_row, new_end_row)
   local line_count = vim.api.nvim_buf_line_count(bufnr)
+  local line_delta = new_end_row - old_end_row
   local rescan_start = math.max(0, start_row - 50)
-  local rescan_end = math.min(line_count - 1, math.max(old_end_row, new_end_row) + 50)
+  local rescan_end = math.max(old_end_row, new_end_row) + 50
 
   for _, equation in ipairs(equations) do
     if equation.end_row >= rescan_start - 1 and equation.start_row <= rescan_end + 1 then
       rescan_start = math.min(rescan_start, math.max(0, equation.start_row - 1))
-      rescan_end = math.max(rescan_end, math.min(line_count - 1, equation.end_row + 1))
+      rescan_end = math.max(rescan_end, equation.end_row + 1)
     end
   end
 
   local next_equations = {}
   for _, equation in ipairs(equations) do
     if equation.end_row < rescan_start or equation.start_row > rescan_end then
-      next_equations[#next_equations + 1] = equation
+      local next_equation = equation
+      if equation.start_row > old_end_row and line_delta ~= 0 then
+        next_equation = vim.tbl_extend("force", equation, {
+          start_row = equation.start_row + line_delta,
+          end_row = equation.end_row + line_delta,
+        })
+        next_equation.key =
+          equation_key(next_equation.start_row, next_equation.end_row, next_equation.text)
+      end
+      if next_equation.start_row >= 0 and next_equation.end_row < line_count then
+        next_equations[#next_equations + 1] = next_equation
+      end
     end
   end
 
-  vim.list_extend(next_equations, M.scan_range(bufnr, rescan_start, rescan_end))
+  local scan_end = math.min(line_count - 1, rescan_end)
+  vim.list_extend(next_equations, M.scan_range(bufnr, rescan_start, scan_end))
   return sort_equations(merge_unique_equations(next_equations))
 end
 
