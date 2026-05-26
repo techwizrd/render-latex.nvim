@@ -44,6 +44,39 @@ describe("render_latex.detect", function()
     assert.are.equal("\\frac{1}{2}", equations[1].text)
   end)
 
+  it("drops display math deleted from the final line", function()
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "before",
+      "$$x$$",
+    })
+    local equations = detect.scan(buf)
+
+    vim.api.nvim_buf_set_lines(buf, 1, 2, false, {})
+    equations = detect.update(equations, buf, 1, 1, 0)
+
+    assert.are.equal(0, #equations)
+  end)
+
+  it("shifts cached equations after deleted lines", function()
+    local lines = {}
+    for index = 1, 60 do
+      lines[index] = "line " .. index
+    end
+    lines[#lines + 1] = "$$x$$"
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    local equations = detect.scan(buf)
+
+    vim.api.nvim_buf_set_lines(buf, 0, 1, false, {})
+    equations = detect.update(equations, buf, 0, 0, -1)
+
+    assert.are.equal(1, #equations)
+    assert.are.equal(59, equations[1].start_row)
+    assert.are.equal(59, equations[1].end_row)
+  end)
+
   it("finds bracket display math blocks", function()
     local buf = vim.api.nvim_create_buf(true, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
