@@ -574,6 +574,86 @@ describe("render_latex.integrations.jupynvim", function()
     package.loaded["jupynvim.notebook"] = previous
   end)
 
+  it("returns no ranges when jupynvim cell state and separators disagree", function()
+    local previous = package.loaded["jupynvim.notebook"]
+    local sep = "# %%[jupynvim:cell-sep]"
+    package.loaded["jupynvim.notebook"] = {
+      CELL_SEP = sep,
+      get = function()
+        return {
+          cells = {
+            { cell_type = "markdown" },
+          },
+        }
+      end,
+    }
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "# markdown",
+      sep,
+      "print('extra cell')",
+    })
+
+    local ranges = require("render_latex.integrations.jupynvim").markdown_ranges(buf)
+    package.loaded["jupynvim.notebook"] = previous
+
+    assert.are.equal(0, #ranges)
+  end)
+
+  it("computes jupynvim image bounds from the text area", function()
+    local winid = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_get_current_buf()
+    local previous_number = vim.wo[winid].number
+    local previous_relativenumber = vim.wo[winid].relativenumber
+    local previous_signcolumn = vim.wo[winid].signcolumn
+    local previous_foldcolumn = vim.wo[winid].foldcolumn
+
+    vim.wo[winid].number = true
+    vim.wo[winid].relativenumber = false
+    vim.wo[winid].signcolumn = "yes:1"
+    vim.wo[winid].foldcolumn = "1"
+
+    local bounds = require("render_latex.integrations.jupynvim").image_bounds(
+      buf,
+      winid,
+      { width = 100 },
+      { col = 5 }
+    )
+
+    vim.wo[winid].number = previous_number
+    vim.wo[winid].relativenumber = previous_relativenumber
+    vim.wo[winid].signcolumn = previous_signcolumn
+    vim.wo[winid].foldcolumn = previous_foldcolumn
+
+    assert.are.equal(7, bounds.start_col)
+    assert.are.equal(89, bounds.width)
+  end)
+
+  it("tracks jupynvim cell type revisions", function()
+    local previous = package.loaded["jupynvim.notebook"]
+    local cell_type = "markdown"
+    local sep = "# %%[jupynvim:cell-sep]"
+    package.loaded["jupynvim.notebook"] = {
+      CELL_SEP = sep,
+      get = function()
+        return {
+          cells = {
+            { cell_type = cell_type },
+          },
+        }
+      end,
+    }
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    local first = require("render_latex.integrations.jupynvim").revision(buf)
+    cell_type = "code"
+    local second = require("render_latex.integrations.jupynvim").revision(buf)
+    package.loaded["jupynvim.notebook"] = previous
+
+    assert.not_equal(first, second)
+  end)
+
   it("uses jupynvim Markdown cells as an experimental display source", function()
     local previous = package.loaded["jupynvim.notebook"]
     local sep = "# %%[jupynvim:cell-sep]"
@@ -605,11 +685,29 @@ describe("render_latex.integrations.jupynvim", function()
 
     assert.are.equal("jupynvim", status.active)
     assert.is_true(status.experimental)
-    assert.are.equal(2, context.image_margin_cols)
     assert.is_true(context.suppress_default_equation_labels)
     assert.is_true(context.clear_source_line_background)
     assert.are.equal(1, #equations)
     assert.are.equal("visible", equations[1].text)
+    assert.are.equal(0, #inline)
+  end)
+
+  it("guards invalid custom inline range returns", function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.b[buf].render_latex_invalid_inline_source = true
+    sources.register({
+      name = "invalid-inline-test",
+      attach = function(target)
+        return target == buf and vim.b[target].render_latex_invalid_inline_source == true
+      end,
+      inline_ranges = function()
+        return false
+      end,
+    })
+
+    local inline = sources.inline_ranges(buf, { { start_row = 0, end_row = 0 } })
+    vim.b[buf].render_latex_invalid_inline_source = false
+
     assert.are.equal(0, #inline)
   end)
 end)
@@ -2309,7 +2407,93 @@ describe("render_latex.renderer", function()
       end
 
       assert.are.equal(3, line_hl_marks)
+
+      renderer.clear(buf)
+      marks = vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true })
+      for _, mark in ipairs(marks) do
+        assert.not_equal("Normal", mark[4].line_hl_group)
+      end
     end)
+  end)
+
+  it("defers non-incremental source rescans until equations are requested", function()
+    local previous_notebook = package.loaded["jupynvim.notebook"]
+    local previous_scan_ranges = detect.scan_ranges
+    local scan_count = 0
+    local sep = "# %%[jupynvim:cell-sep]"
+
+    package.loaded["jupynvim.notebook"] = {
+      CELL_SEP = sep,
+      get = function()
+        return { cells = { { cell_type = "markdown" } } }
+      end,
+    }
+    detect.scan_ranges = function(...)
+      scan_count = scan_count + 1
+      return previous_scan_ranges(...)
+    end
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "python"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+      renderer.attach(buf)
+      assert.are.equal(1, scan_count)
+
+      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "y^2" })
+      assert.are.equal(1, scan_count)
+
+      local source = renderer.current_equation_source(buf)
+      assert.is_truthy(source)
+      assert.are.equal("$$\ny^2\n$$", source.text)
+      assert.are.equal(2, scan_count)
+    end)
+
+    package.loaded["jupynvim.notebook"] = previous_notebook
+    detect.scan_ranges = previous_scan_ranges
+    config.setup()
+
+    if not ok then
+      error(err)
+    end
+  end)
+
+  it("rescans when jupynvim cell metadata changes without text changes", function()
+    local previous_notebook = package.loaded["jupynvim.notebook"]
+    local cell_type = "markdown"
+    local sep = "# %%[jupynvim:cell-sep]"
+
+    package.loaded["jupynvim.notebook"] = {
+      CELL_SEP = sep,
+      get = function()
+        return { cells = { { cell_type = cell_type } } }
+      end,
+    }
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "python"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+      renderer.attach(buf)
+      assert.is_truthy(renderer.current_equation_source(buf))
+
+      cell_type = "code"
+      local source = renderer.current_equation_source(buf)
+      assert.is_nil(source)
+    end)
+
+    package.loaded["jupynvim.notebook"] = previous_notebook
+    config.setup()
+
+    if not ok then
+      error(err)
+    end
   end)
 
   it("honors explicitly enabled jupynvim equation labels", function()
@@ -2324,6 +2508,13 @@ describe("render_latex.renderer", function()
       end
 
       assert.is_true(found_label)
+
+      config.setup()
+      renderer.render(buf)
+      marks = vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true })
+      for _, mark in ipairs(marks) do
+        assert.is_false(vim.deep_equal(mark[4].virt_text, { { "Eq. 1", "Comment" } }))
+      end
     end)
   end)
 

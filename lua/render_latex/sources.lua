@@ -21,7 +21,6 @@ local jupynvim_source = {
   name = "jupynvim",
   experimental = true,
   incremental = false,
-  image_margin_cols = 2,
   suppress_default_equation_labels = true,
   clear_source_line_background = true,
   attach = function(bufnr)
@@ -29,6 +28,17 @@ local jupynvim_source = {
   end,
   display_ranges = function(bufnr)
     return require("render_latex.integrations.jupynvim").markdown_ranges(bufnr)
+  end,
+  revision = function(bufnr)
+    return require("render_latex.integrations.jupynvim").revision(bufnr)
+  end,
+  image_bounds = function(bufnr, winid, window, position)
+    return require("render_latex.integrations.jupynvim").image_bounds(
+      bufnr,
+      winid,
+      window,
+      position
+    )
   end,
   inline = false,
 }
@@ -109,7 +119,7 @@ function M.inline_ranges(bufnr, visible_ranges)
   end
   if type(source.inline_ranges) == "function" then
     local ok, ranges = pcall(source.inline_ranges, bufnr, visible_ranges)
-    if ok then
+    if ok and type(ranges) == "table" then
       return ranges
     end
     return {}
@@ -130,14 +140,41 @@ function M.incremental(bufnr)
   return source ~= nil and source.incremental ~= false
 end
 
+function M.revision(bufnr)
+  local source = M.resolve(bufnr)
+  if source ~= nil and type(source.revision) == "function" then
+    local ok, revision = pcall(source.revision, bufnr)
+    if
+      ok
+      and (type(revision) == "string" or type(revision) == "number" or type(revision) == "boolean")
+    then
+      return tostring(revision)
+    end
+  end
+  return nil
+end
+
 function M.render_context(bufnr)
   local source = M.resolve(bufnr)
   return {
     name = source and source.name or nil,
-    image_margin_cols = source and source.image_margin_cols or 0,
     suppress_default_equation_labels = source and source.suppress_default_equation_labels == true
       or false,
     clear_source_line_background = source and source.clear_source_line_background == true or false,
+  }
+end
+
+function M.image_bounds(bufnr, winid, window, position)
+  local source = M.resolve(bufnr)
+  if source ~= nil and type(source.image_bounds) == "function" then
+    local ok, bounds = pcall(source.image_bounds, bufnr, winid, window, position)
+    if ok and type(bounds) == "table" then
+      return bounds
+    end
+  end
+  return {
+    start_col = position.col,
+    width = window.width,
   }
 end
 

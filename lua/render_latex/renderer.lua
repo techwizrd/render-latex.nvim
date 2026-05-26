@@ -732,6 +732,12 @@ local function should_suppress_label(bufnr)
     and not Config.is_explicit("render.equation_labels")
 end
 
+local function clear_suppressed_label(bufnr, state, equation)
+  if should_suppress_label(bufnr) then
+    Annotations.clear_label(bufnr, Config.ns, state, equation.key)
+  end
+end
+
 local function update_label(bufnr, state, equation, visible_index)
   if should_suppress_label(bufnr) then
     Annotations.clear_label(bufnr, Config.ns, state, equation.key)
@@ -766,10 +772,10 @@ local function update_image(bufnr, winid, equation, meta, backend, window)
   state.images[winid] = state.images[winid] or {}
   state.placements[winid] = state.placements[winid] or {}
 
-  local context = Sources.render_context(bufnr)
-  local margin = context.image_margin_cols or 0
-  local width = math.max(1, window.width - margin * 2)
-  local col = position.col + margin + math.max(0, math.floor((width - meta.width_cells) / 2))
+  local bounds = Sources.image_bounds(bufnr, winid, window, position)
+  local width = math.max(1, bounds.width or window.width)
+  local start_col = bounds.start_col or position.col
+  local col = start_col + math.max(0, math.floor((width - meta.width_cells) / 2))
   local opts = {
     row = row,
     col = col,
@@ -878,6 +884,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
     for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
       visible_index = visible_index + 1
       active[equation.key] = true
+      clear_suppressed_label(bufnr, state, equation)
       local meta = state.metadata[equation.key]
       if focused[equation.key] and should_hide_focused_equation(state, equation.key) then
         clear_equation_display(bufnr, equation.key, backend, true)
@@ -1055,6 +1062,7 @@ function M.render(bufnr)
     for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
       visible_index = visible_index + 1
       active[equation.key] = true
+      clear_suppressed_label(bufnr, state, equation)
       local meta = state.metadata[equation.key]
       if focused_keys[equation.key] and should_hide_focused_equation(state, equation.key) then
         clear_equation_display(bufnr, equation.key, backend, true)

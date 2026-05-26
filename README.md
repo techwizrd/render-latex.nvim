@@ -157,9 +157,14 @@ require("render_latex").register_source({
       { start_row = 0, end_row = 10 },
     }
   end,
+  revision = function(bufnr)
+    return "optional-source-state-version"
+  end,
   inline = false,
 })
 ```
+
+Use `revision` for non-incremental sources whose external state can change without buffer text changes.
 
 This API is intentionally experimental and may change before `v1.0.0`.
 

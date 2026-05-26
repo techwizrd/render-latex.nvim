@@ -34,27 +34,109 @@ function M.markdown_ranges(bufnr)
   end
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local ranges = {}
+  local segments = {}
   local start_row = 0
   local cell_index = 1
 
   for index, line in ipairs(lines) do
     if line == sep then
-      local cell = nb.cells[cell_index]
-      if cell ~= nil and cell.cell_type == "markdown" and start_row <= index - 2 then
-        ranges[#ranges + 1] = { start_row = start_row, end_row = index - 2 }
-      end
+      segments[#segments + 1] = { start_row = start_row, end_row = index - 2 }
       start_row = index
       cell_index = cell_index + 1
     end
   end
+  segments[#segments + 1] = { start_row = start_row, end_row = #lines - 1 }
 
-  local cell = nb.cells[cell_index]
-  if cell ~= nil and cell.cell_type == "markdown" and start_row <= #lines - 1 then
-    ranges[#ranges + 1] = { start_row = start_row, end_row = #lines - 1 }
+  if #segments ~= #nb.cells then
+    return {}
+  end
+
+  local ranges = {}
+  for index, segment in ipairs(segments) do
+    local cell = nb.cells[index]
+    if cell ~= nil and cell.cell_type == "markdown" and segment.start_row <= segment.end_row then
+      ranges[#ranges + 1] = segment
+    end
   end
 
   return ranges
+end
+
+function M.revision(bufnr)
+  local notebook = notebook_module()
+  local nb = notebook ~= nil and M.notebook(bufnr) or nil
+  if notebook == nil or nb == nil or type(nb.cells) ~= "table" then
+    return nil
+  end
+
+  local sep = notebook.CELL_SEP
+  if type(sep) ~= "string" or sep == "" then
+    return nil
+  end
+
+  local parts = { tostring(#nb.cells) }
+  for index, cell in ipairs(nb.cells) do
+    parts[#parts + 1] = tostring(index)
+    parts[#parts + 1] = type(cell) == "table" and tostring(cell.cell_type) or "nil"
+  end
+
+  return table.concat(parts, ":")
+end
+
+local function signcolumn_width(winid)
+  local value = vim.api.nvim_get_option_value("signcolumn", { win = winid })
+  if type(value) ~= "string" then
+    return 0
+  end
+  local count = value:match("^yes:(%d+)$") or value:match("^auto:(%d+)$")
+  if count ~= nil then
+    return 2 * tonumber(count)
+  end
+  if value == "yes" or value == "auto" then
+    return 2
+  end
+  return 0
+end
+
+local function numbercolumn_width(bufnr, winid)
+  local number = vim.api.nvim_get_option_value("number", { win = winid })
+  local relativenumber = vim.api.nvim_get_option_value("relativenumber", { win = winid })
+  if not number and not relativenumber then
+    return 0
+  end
+  local numberwidth = vim.api.nvim_get_option_value("numberwidth", { win = winid })
+  local min_width = type(numberwidth) == "number" and numberwidth or 4
+  return math.max(min_width, #tostring(vim.api.nvim_buf_line_count(bufnr)) + 1)
+end
+
+local function foldcolumn_width(winid)
+  local value = vim.api.nvim_get_option_value("foldcolumn", { win = winid })
+  if type(value) ~= "string" then
+    return 0
+  end
+  local count = value:match("^auto:(%d+)$") or value:match("^(%d+)$")
+  if count ~= nil then
+    return tonumber(count)
+  end
+  if value == "auto" then
+    return 1
+  end
+  return 0
+end
+
+function M.image_bounds(bufnr, winid, window, position)
+  local text_width = math.max(
+    40,
+    window.width
+      - signcolumn_width(winid)
+      - numbercolumn_width(bufnr, winid)
+      - foldcolumn_width(winid)
+  )
+  local border_width = 2
+  return {
+    start_col = position.col + border_width,
+    width = math.max(1, text_width - border_width * 2),
+  }
 end
 
 function M.status(bufnr)
