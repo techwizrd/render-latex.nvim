@@ -280,6 +280,7 @@ function M.doctor_lines()
     "image backend reason: " .. tostring(backend.reason or "<none>"),
     "vim.ui.img available: " .. tostring(backend.builtin_available),
     "kitty available: " .. tostring(backend.kitty_available),
+    "kitty probing: " .. tostring(backend.kitty_probing),
     "tmux detected: " .. tostring(backend.tmux),
     "foreground: "
       .. tostring(render.foreground)

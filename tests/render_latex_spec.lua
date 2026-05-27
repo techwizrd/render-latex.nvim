@@ -1105,6 +1105,7 @@ describe("render_latex.doctor", function()
 
     assert.matches("# render%-latex doctor", text)
     assert.matches("hide on cmdline", text)
+    assert.matches("kitty probing", text)
     assert.matches("## render%-markdown.nvim", text)
     assert.matches("## obsidian.nvim", text)
     assert.matches("The render loop does not inspect other plugins", text)
@@ -1191,14 +1192,18 @@ end)
 describe("render_latex.image_backend", function()
   local previous_kitty
   local previous_wezterm
+  local previous_ghostty
   local previous_term
+  local previous_term_program
   local previous_tmux
   local previous_send
 
   before_each(function()
     previous_kitty = vim.env.KITTY_WINDOW_ID
     previous_wezterm = vim.env.WEZTERM_EXECUTABLE
+    previous_ghostty = vim.env.GHOSTTY_RESOURCES_DIR
     previous_term = vim.env.TERM
+    previous_term_program = vim.env.TERM_PROGRAM
     previous_tmux = vim.env.TMUX
     previous_send = vim.api.nvim_ui_send
     image_backend.reset_for_tests()
@@ -1208,7 +1213,9 @@ describe("render_latex.image_backend", function()
   after_each(function()
     vim.env.KITTY_WINDOW_ID = previous_kitty
     vim.env.WEZTERM_EXECUTABLE = previous_wezterm
+    vim.env.GHOSTTY_RESOURCES_DIR = previous_ghostty
     vim.env.TERM = previous_term
+    vim.env.TERM_PROGRAM = previous_term_program
     vim.env.TMUX = previous_tmux
     vim.api.nvim_ui_send = previous_send
     image_backend.reset_for_tests()
@@ -1253,7 +1260,9 @@ describe("render_latex.image_backend", function()
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
     vim.env.TERM = "xterm-256color"
+    vim.env.TERM_PROGRAM = nil
     vim.env.TMUX = nil
 
     local backend, _, reason = image_backend.get()
@@ -1266,7 +1275,9 @@ describe("render_latex.image_backend", function()
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
-    vim.env.TERM = "xterm-ghostty"
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "xterm-256color"
+    vim.env.TERM_PROGRAM = nil
     vim.env.TMUX = nil
     vim.api.nvim_ui_send = nil
 
@@ -1279,12 +1290,49 @@ describe("render_latex.image_backend", function()
     assert.is_false(status.kitty_available)
   end)
 
+  it("treats Ghostty as a known kitty-compatible terminal", function()
+    config.setup({ image = { backend = "kitty" } })
+    vim.env.KITTY_WINDOW_ID = nil
+    vim.env.WEZTERM_EXECUTABLE = nil
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "xterm-ghostty"
+    vim.env.TERM_PROGRAM = nil
+    vim.env.TMUX = nil
+    vim.api.nvim_ui_send = nil
+
+    local backend, name, reason = image_backend.get()
+    local status = image_backend.status()
+
+    assert.is_truthy(backend)
+    assert.are.equal("kitty", name)
+    assert.is_nil(reason)
+    assert.is_true(status.kitty_available)
+    assert.is_false(status.kitty_probing)
+  end)
+
+  it("detects Ghostty from TERM_PROGRAM", function()
+    config.setup({ image = { backend = "kitty" } })
+    vim.env.KITTY_WINDOW_ID = nil
+    vim.env.WEZTERM_EXECUTABLE = nil
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "xterm-256color"
+    vim.env.TERM_PROGRAM = "ghostty"
+    vim.env.TMUX = nil
+    vim.api.nvim_ui_send = nil
+
+    local backend = image_backend.get()
+
+    assert.is_truthy(backend)
+  end)
+
   it("probes kitty support for unknown compatible terminals", function()
     local sent = {}
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
-    vim.env.TERM = "xterm-ghostty"
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "xterm-direct"
+    vim.env.TERM_PROGRAM = "unknown"
     vim.env.TMUX = nil
     vim.api.nvim_ui_send = function(sequence)
       sent[#sent + 1] = sequence
@@ -1305,7 +1353,9 @@ describe("render_latex.image_backend", function()
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
-    vim.env.TERM = "xterm-ghostty"
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "xterm-direct"
+    vim.env.TERM_PROGRAM = "unknown"
     vim.env.TMUX = nil
     vim.api.nvim_ui_send = function(sequence)
       sent[#sent + 1] = sequence
@@ -1324,18 +1374,21 @@ describe("render_latex.image_backend", function()
     assert.are.equal(1, #sent)
   end)
 
-  it("marks kitty support unavailable when DA1 arrives first", function()
+  it("keeps probing when DA1 arrives before the kitty response", function()
     local sent = {}
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
-    vim.env.TERM = "xterm-ghostty"
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "xterm-direct"
+    vim.env.TERM_PROGRAM = "unknown"
     vim.env.TMUX = nil
     vim.api.nvim_ui_send = function(sequence)
       sent[#sent + 1] = sequence
     end
 
     image_backend.get()
+    local request_id = sent[1]:match("\027_Gi=(%d+),")
     vim.api.nvim_exec_autocmds("TermResponse", {
       data = { sequence = "\027[?62;c" },
     })
@@ -1343,9 +1396,17 @@ describe("render_latex.image_backend", function()
     local backend, _, reason = image_backend.get()
 
     assert.is_nil(backend)
-    assert.are.equal("kitty image protocol is not available in this terminal", reason)
-    assert.is_false(image_backend.status().kitty_probing)
+    assert.is_truthy(reason)
+    assert.is_true(image_backend.status().kitty_probing)
     assert.are.equal(1, #sent)
+
+    vim.api.nvim_exec_autocmds("TermResponse", {
+      data = { sequence = ("\027_Gi=%s;OK\027\\"):format(request_id) },
+    })
+
+    backend = image_backend.get()
+    assert.is_truthy(backend)
+    assert.is_false(image_backend.status().kitty_probing)
   end)
 end)
 

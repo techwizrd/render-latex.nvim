@@ -21,6 +21,17 @@ local function can_probe_kitty()
   return type(vim.api.nvim_ui_send) == "function"
 end
 
+local function known_kitty_terminal()
+  local term = (vim.env.TERM or ""):lower()
+  local term_program = (vim.env.TERM_PROGRAM or ""):lower()
+  return vim.env.KITTY_WINDOW_ID ~= nil
+    or vim.env.WEZTERM_EXECUTABLE ~= nil
+    or vim.env.GHOSTTY_RESOURCES_DIR ~= nil
+    or term:find("kitty", 1, true) ~= nil
+    or term:find("ghostty", 1, true) ~= nil
+    or term_program == "ghostty"
+end
+
 local function notify_listeners(status)
   for _, listener in ipairs(listeners) do
     pcall(listener, status)
@@ -61,9 +72,7 @@ local function start_probe()
         return
       end
 
-      if sequence:match("^\027%[[%?%d;>]*c") then
-        finish_probe("unsupported")
-      end
+      -- The DA response can arrive before the graphics response in compatible terminals.
     end,
   })
 
@@ -79,11 +88,7 @@ local function kitty_supported()
   if is_tmux() then
     return vim.fn.executable("tmux") == 1
   end
-  if
-    vim.env.KITTY_WINDOW_ID ~= nil
-    or vim.env.WEZTERM_EXECUTABLE ~= nil
-    or (vim.env.TERM or ""):lower():find("kitty", 1, true) ~= nil
-  then
+  if known_kitty_terminal() then
     return true
   end
   if probe.status == "unknown" then
