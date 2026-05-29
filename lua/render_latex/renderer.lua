@@ -20,6 +20,11 @@ local function should_skip_render_loop()
   return suppression.cmdline
 end
 
+local function should_hide_focused_equation(state, key)
+  local mode = vim.api.nvim_get_mode().mode
+  return state.dirty[key] == true or mode:match("^[iR]") ~= nil
+end
+
 ---@class render_latex.BufferState
 ---@field marks table<string, integer>
 ---@field images table<integer, table<string, integer>>
@@ -43,6 +48,8 @@ end
 ---@field label_layouts table<string, string>
 ---@field viewports table<integer, { top: integer, bottom: integer, direction: 'up'|'down'|'still' }>
 ---@field scroll_scheduled boolean
+---@field worker_retries integer
+---@field worker_retry_scheduled boolean
 ---@field timer any
 
 ---@type table<integer, render_latex.BufferState>
@@ -90,6 +97,8 @@ local function get_buffer_state(bufnr)
     label_layouts = {},
     viewports = {},
     scroll_scheduled = false,
+    worker_retries = 0,
+    worker_retry_scheduled = false,
     timer = nil,
   }
   buffers[bufnr] = state
@@ -373,6 +382,30 @@ local function record_render_failure(state, equation, content_hash, render_finge
     message = message,
   }
   Util.warn(("Failed to render equation: %s"):format(message))
+end
+
+local function retryable_worker_error(err)
+  return err == "worker request timed out"
+    or err == "worker exited"
+    or err:match("^worker exited:") ~= nil
+end
+
+local function schedule_worker_retry(bufnr, state)
+  if state.worker_retry_scheduled or state.worker_retries >= 2 then
+    return
+  end
+  state.worker_retries = state.worker_retries + 1
+  state.worker_retry_scheduled = true
+  vim.defer_fn(function()
+    vim.schedule(function()
+      local current = buffers[bufnr]
+      if current == nil then
+        return
+      end
+      current.worker_retry_scheduled = false
+      M.queue(bufnr)
+    end)
+  end, 500 * state.worker_retries)
 end
 
 local function prune_stale_state(state, indexed_equations)
@@ -775,7 +808,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
       visible_index = visible_index + 1
       active[equation.key] = true
       local meta = state.metadata[equation.key]
-      if focused[equation.key] then
+      if focused[equation.key] and should_hide_focused_equation(state, equation.key) then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] or state.delayed_render[equation.key] then
         clear_equation_display(bufnr, equation.key, backend, true)
@@ -868,9 +901,14 @@ local function request_renders(bufnr, equations_to_render)
         state.last_worker_error = err
         Util.warn(("Failed to render equations: %s"):format(err))
       end
+      if retryable_worker_error(err) then
+        schedule_worker_retry(bufnr, state)
+      end
       return
     end
     state.last_worker_error = nil
+    state.worker_retries = 0
+    state.worker_retry_scheduled = false
 
     local needs_rerender = false
     for index, equation in ipairs(pending_equations) do
@@ -947,7 +985,7 @@ function M.render(bufnr)
       visible_index = visible_index + 1
       active[equation.key] = true
       local meta = state.metadata[equation.key]
-      if focused_keys[equation.key] then
+      if focused_keys[equation.key] and should_hide_focused_equation(state, equation.key) then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] then
         clear_equation_display(bufnr, equation.key, backend, true)

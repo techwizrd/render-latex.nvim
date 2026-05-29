@@ -3,6 +3,7 @@ local Install = require("render_latex.install")
 local Util = require("render_latex.util")
 
 local M = {}
+local request_timeout_ms = 30000
 
 local state = {
   handle = nil,
@@ -14,6 +15,7 @@ local state = {
   pending = {},
   stderr_chunks = {},
   stopping = false,
+  generation = 0,
 }
 
 local function stderr_tail()
@@ -33,11 +35,50 @@ local function close_handle(handle)
   end
 end
 
-local function close_process_handles()
-  close_handle(state.handle)
-  close_handle(state.stdin)
-  close_handle(state.stdout)
-  close_handle(state.stderr)
+local function kill_handle(handle)
+  if handle ~= nil and not handle:is_closing() then
+    pcall(handle.kill, handle, "sigterm")
+  end
+end
+
+local function close_handles(handle, stdin, stdout, stderr, kill)
+  if kill then
+    kill_handle(handle)
+  end
+  close_handle(handle)
+  close_handle(stdin)
+  close_handle(stdout)
+  close_handle(stderr)
+end
+
+local function close_process_handles(kill)
+  close_handles(state.handle, state.stdin, state.stdout, state.stderr, kill)
+end
+
+local function active_process(handle, generation)
+  return state.handle == handle and state.generation == generation
+end
+
+local function reset_state(notify_pending, reason)
+  local stderr = stderr_tail()
+  local exit_err = reason or (stderr ~= nil and ("worker exited: " .. stderr) or "worker exited")
+  for id, pending in pairs(state.pending) do
+    if pending.timer ~= nil and not pending.timer:is_closing() then
+      pending.timer:stop()
+      pending.timer:close()
+    end
+    if notify_pending then
+      pending.callback(nil, exit_err)
+    end
+    state.pending[id] = nil
+  end
+  state.handle = nil
+  state.stdin = nil
+  state.stdout = nil
+  state.stderr = nil
+  state.buffer = ""
+  state.stderr_chunks = {}
+  state.stopping = false
 end
 
 local function json_nil_to_nil(value)
@@ -54,22 +95,17 @@ local function json_nil_to_nil(value)
   return value
 end
 
-local function reset_state(notify_pending)
-  local stderr = stderr_tail()
-  local exit_err = stderr ~= nil and ("worker exited: " .. stderr) or "worker exited"
-  for id, callback in pairs(state.pending) do
-    if notify_pending then
-      callback(nil, exit_err)
-    end
-    state.pending[id] = nil
+local function complete_pending(id, result, err)
+  local pending = state.pending[id]
+  if pending == nil then
+    return
   end
-  state.handle = nil
-  state.stdin = nil
-  state.stdout = nil
-  state.stderr = nil
-  state.buffer = ""
-  state.stderr_chunks = {}
-  state.stopping = false
+  state.pending[id] = nil
+  if pending.timer ~= nil and not pending.timer:is_closing() then
+    pending.timer:stop()
+    pending.timer:close()
+  end
+  pending.callback(result, err)
 end
 
 local function parse_messages(chunk)
@@ -95,13 +131,11 @@ local function parse_messages(chunk)
     else
       message.error = json_nil_to_nil(message.error)
       message.result = json_nil_to_nil(message.result)
-      local callback = state.pending[message.id]
-      if callback ~= nil then
-        state.pending[message.id] = nil
+      if state.pending[message.id] ~= nil then
         if message.error ~= nil then
-          callback(nil, message.error.message)
+          complete_pending(message.id, nil, message.error.message)
         else
-          callback(message.result, nil)
+          complete_pending(message.id, message.result, nil)
         end
       end
     end
@@ -130,6 +164,8 @@ local function start_worker()
   local stdin = vim.uv.new_pipe(false)
   local stdout = vim.uv.new_pipe(false)
   local stderr = vim.uv.new_pipe(false)
+  state.generation = state.generation + 1
+  local generation = state.generation
 
   local handle, pid_or_err = vim.uv.spawn(bin, {
     args = Config.worker.args,
@@ -137,7 +173,11 @@ local function start_worker()
     stdio = { stdin, stdout, stderr },
   }, function()
     vim.schedule(function()
-      close_process_handles()
+      if not active_process(handle, generation) then
+        close_handles(handle, stdin, stdout, stderr, false)
+        return
+      end
+      close_process_handles(false)
       reset_state(not state.stopping)
     end)
   end)
@@ -192,7 +232,17 @@ function M.request(method, params, callback)
 
   local id = state.next_id
   state.next_id = state.next_id + 1
-  state.pending[id] = callback
+  local timer = vim.uv.new_timer()
+  state.pending[id] = { callback = callback, timer = timer }
+  timer:start(request_timeout_ms, 0, function()
+    vim.schedule(function()
+      if state.pending[id] == nil then
+        return
+      end
+      close_process_handles(true)
+      reset_state(true, "worker request timed out")
+    end)
+  end)
 
   local message = vim.json.encode({
     id = id,
@@ -207,8 +257,7 @@ function M.request(method, params, callback)
     end
     vim.schedule(function()
       if state.pending[id] ~= nil then
-        state.pending[id] = nil
-        callback(nil, "worker write failed: " .. tostring(err))
+        complete_pending(id, nil, "worker write failed: " .. tostring(err))
       end
     end)
   end)
@@ -227,7 +276,7 @@ function M.stop()
 
   state.stopping = true
   M.request("shutdown", {}, function() end)
-  close_process_handles()
+  close_process_handles(false)
   reset_state(false)
 end
 
@@ -236,6 +285,10 @@ function M.status()
     running = state.handle ~= nil,
     pending = vim.tbl_count(state.pending),
   }
+end
+
+function M.set_request_timeout_for_tests(timeout_ms)
+  request_timeout_ms = timeout_ms
 end
 
 return M

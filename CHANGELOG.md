@@ -20,6 +20,9 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Added virtual padding for inline math conceals in Markdown pipe tables so table borders keep their expected width more often.
 - Improved first-run worker install scheduling so plugin-manager options can override defaults before automatic installs start.
 - Improved worker error reporting and shutdown handling.
+- Preferred Kitty graphics over the Neovim image API in tmux auto-detection when passthrough is available, while still falling back to `vim.ui.img` when Kitty is unavailable.
+- Made Kitty backend probing more tolerant of slow terminal responses by increasing the timeout and retrying unsupported probe results.
+- Allowed focused display equations to render in Normal mode on first view while preserving raw reveal behavior while editing.
 
 ### Fixed
 
@@ -30,6 +33,9 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Fixed render scheduling while floating UI is visible so work can still reach the worker while image placement stays suppressed.
 - Fixed configured `worker.bin` status and health reporting when the configured path is not executable.
 - Avoided repeated full-buffer inline fallback scans for buffers with no display equations.
+- Fixed rendering startup when the `markdown_inline` Treesitter query/parser is unavailable by falling back to non-Treesitter display math detection.
+- Fixed tmux backend diagnostics so passthrough-disabled sessions are reported clearly and explicit Kitty configuration can force passthrough when terminal markers are unavailable inside tmux.
+- Fixed stuck worker requests by timing out hung requests, terminating stale worker handles safely, and scheduling bounded render retries after worker reset errors.
 
 ## 0.1.0-rc2 - 2026-05-16
 

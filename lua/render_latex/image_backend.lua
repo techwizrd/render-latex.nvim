@@ -7,7 +7,17 @@ local probe = {
   pending = false,
   request_id = 30,
   autocmd = nil,
+  unsupported_at = nil,
 }
+
+local tmux_passthrough = {
+  value = nil,
+  checked_at = 0,
+}
+
+local PROBE_TIMEOUT_MS = 500
+local PROBE_RETRY_MS = 2000
+local TMUX_CACHE_MS = 2000
 
 local function is_tmux()
   return vim.env.TMUX ~= nil and vim.env.TMUX ~= ""
@@ -21,15 +31,37 @@ local function can_probe_kitty()
   return type(vim.api.nvim_ui_send) == "function"
 end
 
+local function env_present(name)
+  return vim.env[name] ~= nil and vim.env[name] ~= ""
+end
+
 local function known_kitty_terminal()
   local term = (vim.env.TERM or ""):lower()
   local term_program = (vim.env.TERM_PROGRAM or ""):lower()
-  return vim.env.KITTY_WINDOW_ID ~= nil
-    or vim.env.WEZTERM_EXECUTABLE ~= nil
-    or vim.env.GHOSTTY_RESOURCES_DIR ~= nil
+  return env_present("KITTY_WINDOW_ID")
+    or env_present("WEZTERM_EXECUTABLE")
+    or env_present("GHOSTTY_RESOURCES_DIR")
     or term:find("kitty", 1, true) ~= nil
     or term:find("ghostty", 1, true) ~= nil
+    or term_program == "kitty"
     or term_program == "ghostty"
+    or term_program == "wezterm"
+end
+
+local function tmux_passthrough_enabled()
+  if not is_tmux() or vim.fn.executable("tmux") ~= 1 then
+    return false
+  end
+
+  local now = vim.uv.now()
+  if tmux_passthrough.value ~= nil and now - tmux_passthrough.checked_at < TMUX_CACHE_MS then
+    return tmux_passthrough.value
+  end
+
+  local value = require("render_latex.tmux").option("allow-passthrough")
+  tmux_passthrough.value = value == "on" or value == "all"
+  tmux_passthrough.checked_at = now
+  return tmux_passthrough.value
 end
 
 local function notify_listeners(status)
@@ -49,6 +81,7 @@ local function finish_probe(status)
   local changed = probe.status ~= status
   probe.status = status
   probe.pending = false
+  probe.unsupported_at = status == "unsupported" and vim.uv.now() or nil
   cleanup_probe()
   if changed then
     notify_listeners(status)
@@ -81,20 +114,39 @@ local function start_probe()
     if probe.pending and probe.request_id == request_id then
       finish_probe("unsupported")
     end
-  end, 200)
+  end, PROBE_TIMEOUT_MS)
 end
 
 local function kitty_supported()
   if is_tmux() then
-    return vim.fn.executable("tmux") == 1
+    return tmux_passthrough_enabled()
+      and (known_kitty_terminal() or Config.image.backend == "kitty")
   end
   if known_kitty_terminal() then
     return true
+  end
+  if
+    probe.status == "unsupported"
+    and probe.unsupported_at ~= nil
+    and vim.uv.now() - probe.unsupported_at >= PROBE_RETRY_MS
+  then
+    probe.status = "unknown"
+    probe.unsupported_at = nil
   end
   if probe.status == "unknown" then
     start_probe()
   end
   return probe.status == "supported"
+end
+
+local function kitty_unavailable_reason()
+  if is_tmux() and not tmux_passthrough_enabled() then
+    return "tmux allow-passthrough is not enabled"
+  end
+  if is_tmux() and not known_kitty_terminal() then
+    return "tmux outer terminal is not known to support Kitty graphics; set image.backend = 'kitty' to force it"
+  end
+  return "kitty image protocol is not available in this terminal"
 end
 
 function M.detect_name()
@@ -104,11 +156,14 @@ function M.detect_name()
   if Config.image.backend == "kitty" then
     return "kitty"
   end
-  if is_tmux() then
+  if is_tmux() and kitty_supported() then
     return "kitty"
   end
   if use_builtin() then
     return "nvim"
+  end
+  if is_tmux() then
+    return "kitty"
   end
   return "kitty"
 end
@@ -124,7 +179,7 @@ function M.get()
   if kitty_supported() then
     return require("render_latex.image_backends.kitty"), "kitty"
   end
-  return nil, name, "kitty image protocol is not available in this terminal"
+  return nil, name, kitty_unavailable_reason()
 end
 
 function M.status()
@@ -137,6 +192,7 @@ function M.status()
     builtin_available = use_builtin(),
     kitty_available = kitty_supported(),
     kitty_probing = probe.pending,
+    tmux_passthrough = tmux_passthrough_enabled(),
   }
 end
 
@@ -149,6 +205,9 @@ function M.reset_for_tests()
   probe.status = "unknown"
   probe.pending = false
   probe.request_id = 30
+  probe.unsupported_at = nil
+  tmux_passthrough.value = nil
+  tmux_passthrough.checked_at = 0
 end
 
 return M

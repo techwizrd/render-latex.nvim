@@ -2,12 +2,16 @@ local Util = require("render_latex.util")
 
 local M = {}
 
-local latex_block_query = vim.treesitter.query.parse(
+local ok_query, latex_block_query = pcall(
+  vim.treesitter.query.parse,
   "markdown_inline",
   [[
   (latex_block) @math
 ]]
 )
+if not ok_query then
+  latex_block_query = nil
+end
 
 local function normalize_text(text)
   local trimmed = vim.trim(text)
@@ -297,6 +301,10 @@ local function markdown_inline_parser(bufnr)
 end
 
 local function treesitter_equations(bufnr, context, start_row, end_row)
+  if latex_block_query == nil then
+    return {}
+  end
+
   local parser = markdown_inline_parser(bufnr)
   if parser == nil then
     return {}

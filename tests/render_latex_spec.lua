@@ -9,12 +9,37 @@ local image_backend = require("render_latex.image_backend")
 local integrations = require("render_latex.integrations")
 local install = require("render_latex.install")
 local renderer = require("render_latex.renderer")
+local tmux = require("render_latex.tmux")
 local ui = require("render_latex.ui")
 local util = require("render_latex.util")
 local viewport = require("render_latex.viewport")
 local worker = require("render_latex.worker")
 
 describe("render_latex.detect", function()
+  it("falls back when markdown_inline query parsing is unavailable", function()
+    local previous_detect = package.loaded["render_latex.detect"]
+    local previous_parse = vim.treesitter.query.parse
+    vim.treesitter.query.parse = function(lang, query)
+      if lang == "markdown_inline" then
+        error("missing parser")
+      end
+      return previous_parse(lang, query)
+    end
+    package.loaded["render_latex.detect"] = nil
+
+    local ok, fallback_detect = pcall(require, "render_latex.detect")
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+    local equations = ok and fallback_detect.scan(buf) or {}
+
+    package.loaded["render_latex.detect"] = previous_detect
+    vim.treesitter.query.parse = previous_parse
+
+    assert.is_true(ok)
+    assert.are.equal(1, #equations)
+    assert.are.equal("$$", equations[1].delimiter)
+  end)
+
   it("finds $$ display math blocks", function()
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
@@ -1410,6 +1435,125 @@ describe("render_latex.image_backend", function()
     assert.are.equal("vim.ui.img is unavailable", reason)
   end)
 
+  it("prefers kitty in tmux auto mode when passthrough is available", function()
+    local previous_option = tmux.option
+    local previous_executable = vim.fn.executable
+    local previous_img = vim.ui.img
+    vim.ui.img = {
+      set = function() end,
+      get = function() end,
+      del = function() end,
+    }
+    config.setup({ image = { backend = "auto" } })
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.KITTY_WINDOW_ID = "1"
+    vim.fn.executable = function(name)
+      return name == "tmux" and 1 or previous_executable(name)
+    end
+    tmux.option = function()
+      return "on"
+    end
+
+    local backend, name, reason = image_backend.get()
+
+    tmux.option = previous_option
+    vim.fn.executable = previous_executable
+    vim.ui.img = previous_img
+
+    assert.is_truthy(backend)
+    assert.are.equal("kitty", name)
+    assert.is_nil(reason)
+  end)
+
+  it("falls back to nvim in tmux auto mode when kitty is unavailable", function()
+    local previous_option = tmux.option
+    local previous_executable = vim.fn.executable
+    local previous_img = vim.ui.img
+    vim.ui.img = {
+      set = function() end,
+      get = function() end,
+      del = function() end,
+    }
+    config.setup({ image = { backend = "auto" } })
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.KITTY_WINDOW_ID = nil
+    vim.env.WEZTERM_EXECUTABLE = nil
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "screen-256color"
+    vim.env.TERM_PROGRAM = nil
+    vim.fn.executable = function(name)
+      return name == "tmux" and 1 or previous_executable(name)
+    end
+    tmux.option = function()
+      return "off"
+    end
+
+    local backend, name, reason = image_backend.get()
+
+    tmux.option = previous_option
+    vim.fn.executable = previous_executable
+    vim.ui.img = previous_img
+
+    assert.is_truthy(backend)
+    assert.are.equal("nvim", name)
+    assert.is_nil(reason)
+  end)
+
+  it("requires tmux passthrough and a known outer terminal for kitty", function()
+    local previous_option = tmux.option
+    local previous_executable = vim.fn.executable
+    local previous_img = vim.ui.img
+    vim.ui.img = {}
+    config.setup({ image = { backend = "kitty" } })
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.KITTY_WINDOW_ID = nil
+    vim.env.WEZTERM_EXECUTABLE = nil
+    vim.env.GHOSTTY_RESOURCES_DIR = nil
+    vim.env.TERM = "screen-256color"
+    vim.env.TERM_PROGRAM = nil
+    vim.fn.executable = function(name)
+      return name == "tmux" and 1 or previous_executable(name)
+    end
+    tmux.option = function()
+      return "off"
+    end
+
+    local backend, _, reason = image_backend.get()
+    assert.is_nil(backend)
+    assert.are.equal("tmux allow-passthrough is not enabled", reason)
+
+    image_backend.reset_for_tests()
+    tmux.option = function()
+      return "on"
+    end
+
+    config.setup({ image = { backend = "auto" } })
+    vim.env.KITTY_WINDOW_ID = ""
+    backend, _, reason = image_backend.get()
+    assert.is_nil(backend)
+    assert.are.equal(
+      "tmux outer terminal is not known to support Kitty graphics; set image.backend = 'kitty' to force it",
+      reason
+    )
+
+    config.setup({ image = { backend = "kitty" } })
+    image_backend.reset_for_tests()
+    backend, _, reason = image_backend.get()
+    assert.is_truthy(backend)
+    assert.is_nil(reason)
+
+    vim.env.KITTY_WINDOW_ID = "1"
+    image_backend.reset_for_tests()
+    backend, _, reason = image_backend.get()
+
+    tmux.option = previous_option
+    vim.fn.executable = previous_executable
+    vim.ui.img = previous_img
+
+    assert.is_truthy(backend)
+    assert.is_nil(reason)
+  end)
+
   it("reports unavailable explicit kitty backend without terminal support", function()
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
@@ -1631,6 +1775,63 @@ describe("render_latex.install", function()
   end)
 end)
 
+describe("render_latex.worker", function()
+  it("times out pending requests so renders can retry", function()
+    local previous_spawn = vim.uv.spawn
+    local previous_pipe = vim.uv.new_pipe
+    local previous_executable = vim.fn.executable
+    local callback_err
+
+    local function fake_handle()
+      local closed = false
+      return {
+        is_closing = function()
+          return closed
+        end,
+        close = function()
+          closed = true
+        end,
+        read_start = function() end,
+        write = function(_, _, callback)
+          if callback ~= nil then
+            callback(nil)
+          end
+        end,
+      }
+    end
+
+    vim.fn.executable = function(path)
+      return path == "/tmp/render-latex-worker-timeout" and 1 or 0
+    end
+    vim.uv.new_pipe = function()
+      return fake_handle()
+    end
+    vim.uv.spawn = function()
+      return fake_handle(), 123
+    end
+    config.setup({ worker = { bin = "/tmp/render-latex-worker-timeout" } })
+    worker.set_request_timeout_for_tests(1)
+
+    worker.request("render_batch", { items = {} }, function(_, err)
+      callback_err = err
+    end)
+    vim.wait(100, function()
+      return callback_err ~= nil
+    end)
+
+    worker.set_request_timeout_for_tests(30000)
+    worker.stop()
+    config.setup()
+    vim.uv.spawn = previous_spawn
+    vim.uv.new_pipe = previous_pipe
+    vim.fn.executable = previous_executable
+
+    assert.are.equal("worker request timed out", callback_err)
+    assert.is_false(worker.status().running)
+    assert.are.equal(0, worker.status().pending)
+  end)
+end)
+
 describe("render_latex.renderer", function()
   it("resolves automatic render options", function()
     local opts = renderer.resolved_options()
@@ -1835,6 +2036,54 @@ describe("render_latex.renderer", function()
     viewport.viewport_range = previous_viewport_range
 
     assert.are.equal(1, scan_count)
+  end)
+
+  it("renders a focused equation in normal mode on first view", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_viewport_range = viewport.viewport_range
+    local request_count = 0
+
+    local backend = {
+      del = function() end,
+      set = function()
+        return 1
+      end,
+    }
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    image_backend.get = function()
+      return backend, "test"
+    end
+    worker.request_batch = function(items, callback)
+      request_count = request_count + 1
+      assert.are.equal("x^2", items[1].formula)
+      callback(nil, "worker installing")
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+    vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+    renderer.set_suppressed("cmdline", false)
+    renderer.set_suppressed("floating", false)
+    renderer.attach(buf)
+    renderer.render(buf)
+
+    worker.request_batch = previous_request_batch
+    viewport.viewport_range = previous_viewport_range
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+
+    assert.are.equal(1, request_count)
   end)
 
   it("can inspect and toggle the current equation", function()
