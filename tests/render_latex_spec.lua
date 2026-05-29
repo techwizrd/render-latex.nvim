@@ -761,6 +761,7 @@ describe("render_latex.install", function()
   local previous_mkdir
   local previous_delete
   local previous_rename
+  local previous_os_uname
 
   before_each(function()
     previous_system = vim.system
@@ -769,6 +770,7 @@ describe("render_latex.install", function()
     previous_mkdir = vim.fn.mkdir
     previous_delete = vim.fn.delete
     previous_rename = vim.uv.fs_rename
+    previous_os_uname = vim.uv.os_uname
     install.reset_for_tests()
     config.setup()
   end)
@@ -780,13 +782,14 @@ describe("render_latex.install", function()
     vim.fn.mkdir = previous_mkdir
     vim.fn.delete = previous_delete
     vim.uv.fs_rename = previous_rename
+    vim.uv.os_uname = previous_os_uname
     install.reset_for_tests()
     config.setup()
   end)
 
   it("normalizes supported platform names", function()
     assert.are.equal("linux-x64", install._system_key_from_uname("Linux", "x86_64"))
-    assert.is_nil(install._system_key_from_uname("Linux", "aarch64"))
+    assert.are.equal("linux-arm64", install._system_key_from_uname("Linux", "aarch64"))
     assert.are.equal("macos-x64", install._system_key_from_uname("Darwin", "x86_64"))
     assert.are.equal("macos-arm64", install._system_key_from_uname("Darwin", "arm64"))
     assert.are.equal("windows-x64", install._system_key_from_uname("Windows_NT", "AMD64"))
@@ -940,6 +943,97 @@ describe("render_latex.install", function()
     assert.are.equal("install", ready_operation)
     assert.is_false(install.status().installing)
     assert.are.equal("success", progress[#progress].opts.status)
+  end)
+
+  it("falls back to unreleased for missing latest Linux ARM64 assets", function()
+    local commands = {}
+    local callbacks = {}
+    local callback_path, callback_err
+
+    config.setup({ install = { repository = "techwizrd/render-latex.nvim", version = "latest" } })
+    vim.uv.os_uname = function()
+      return { sysname = "Linux", machine = "aarch64" }
+    end
+    vim.fn.executable = function(name)
+      return name == "curl" and 1 or 0
+    end
+    vim.fn.mkdir = function() end
+    vim.fn.delete = function() end
+    vim.uv.fs_rename = function()
+      return true
+    end
+    vim.system = function(command, _, callback)
+      commands[#commands + 1] = command
+      callbacks[#callbacks + 1] = callback
+      return {}
+    end
+
+    install.install_worker(false, function(path, err)
+      callback_path = path
+      callback_err = err
+    end)
+
+    assert.matches("/releases/latest/download/render%-latex%-worker%-linux%-arm64$", commands[1][7])
+    callbacks[1]({ code = 22, stderr = "404" })
+
+    vim.wait(100, function()
+      return #commands == 2
+    end)
+
+    assert.matches(
+      "/releases/download/unreleased/render%-latex%-worker%-linux%-arm64$",
+      commands[2][7]
+    )
+    callbacks[2]({ code = 0, stderr = "" })
+
+    vim.wait(100, function()
+      return callback_path ~= nil or callback_err ~= nil
+    end)
+
+    assert.are.equal(install.managed_worker_path(), callback_path)
+    assert.is_nil(callback_err)
+    assert.is_false(install.status().installing)
+  end)
+
+  it("does not fall back to unreleased for pinned Linux ARM64 installs", function()
+    local commands = {}
+    local callbacks = {}
+    local callback_path, callback_err
+
+    config.setup({ install = { repository = "techwizrd/render-latex.nvim", version = "v1.2.3" } })
+    vim.uv.os_uname = function()
+      return { sysname = "Linux", machine = "aarch64" }
+    end
+    vim.fn.executable = function(name)
+      return name == "curl" and 1 or 0
+    end
+    vim.fn.mkdir = function() end
+    vim.fn.delete = function() end
+    vim.system = function(command, _, callback)
+      commands[#commands + 1] = command
+      callbacks[#callbacks + 1] = callback
+      return {}
+    end
+
+    install.install_worker(false, function(path, err)
+      callback_path = path
+      callback_err = err
+    end)
+
+    assert.matches(
+      "/releases/download/v1%.2%.3/render%-latex%-worker%-linux%-arm64$",
+      commands[1][7]
+    )
+    callbacks[1]({ code = 22, stderr = "404" })
+
+    vim.wait(100, function()
+      return callback_err ~= nil
+    end)
+
+    assert.are.equal(1, #commands)
+    assert.is_nil(callback_path)
+    assert.matches("failed to download render%-latex worker", callback_err)
+    assert.is_false(install.status().installing)
   end)
 end)
 

@@ -159,11 +159,10 @@ Rendering should never make normal editing feel stuck.
 The runtime installer expects direct executable release assets with these names:
 
 - `render-latex-worker-linux-x64`
+- `render-latex-worker-linux-arm64`
 - `render-latex-worker-macos-x64`
 - `render-latex-worker-macos-arm64`
 - `render-latex-worker-windows-x64.exe`
-
-Linux ARM64 is intentionally not advertised as a prebuilt target for the first release. Users on Linux ARM64 should use `:RenderLatex build` or configure `worker.bin`.
 
 The release and unreleased workflows upload `SHA256SUMS`. The installer does not verify checksums yet; let's keep this as a future hardening task unless release security requirements change.
 

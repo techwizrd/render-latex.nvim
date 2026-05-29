@@ -60,6 +60,15 @@ local function executable_asset_name(system_key)
   return "render-latex-worker-" .. system_key .. suffix
 end
 
+local function asset_url_for_version(system_key, version)
+  local release_path = version == "latest" and "latest/download" or ("download/" .. version)
+  return ("https://github.com/%s/releases/%s/%s"):format(
+    Config.install.repository,
+    release_path,
+    executable_asset_name(system_key)
+  )
+end
+
 local function system_key_from_uname(sysname, machine)
   local os
   if sysname == "Darwin" then
@@ -75,7 +84,7 @@ local function system_key_from_uname(sysname, machine)
   local arch
   if machine == "x86_64" or machine == "amd64" or machine == "AMD64" then
     arch = "x64"
-  elseif os ~= "linux" and (machine == "aarch64" or machine == "arm64" or machine == "ARM64") then
+  elseif machine == "aarch64" or machine == "arm64" or machine == "ARM64" then
     arch = "arm64"
   else
     return nil
@@ -114,13 +123,14 @@ function M.asset_url()
     return nil
   end
 
-  local version = Config.install.version == "latest" and "latest/download"
-    or ("download/" .. Config.install.version)
-  return ("https://github.com/%s/releases/%s/%s"):format(
-    Config.install.repository,
-    version,
-    executable_asset_name(system_key)
-  )
+  return asset_url_for_version(system_key, Config.install.version)
+end
+
+local function fallback_asset_url(system_key)
+  if Config.install.version == "latest" and system_key == "linux-arm64" then
+    return asset_url_for_version(system_key, "unreleased")
+  end
+  return nil
 end
 
 function M.local_worker_path()
@@ -256,8 +266,9 @@ function M.install_worker(notify, callback)
   end
 
   local final_path = M.managed_worker_path()
+  local system_key = M.system_key()
   local url = M.asset_url()
-  if final_path == nil or url == nil then
+  if final_path == nil or system_key == nil or url == nil then
     local err = "prebuilt worker is not available for this OS/architecture"
     install_error = err
     if notify then
@@ -272,7 +283,13 @@ function M.install_worker(notify, callback)
   local parent = vim.fs.dirname(final_path)
   vim.fn.mkdir(parent, "p")
   local tmp_path = final_path .. ".tmp"
-  local command = download_command(url, tmp_path)
+  local urls = { url }
+  local fallback_url = fallback_asset_url(system_key)
+  if fallback_url ~= nil then
+    urls[#urls + 1] = fallback_url
+  end
+  local attempt = 1
+  local command = download_command(urls[attempt], tmp_path)
   if command == nil then
     local err = "curl, wget, powershell, or pwsh is required to download the worker"
     install_error = err
@@ -290,59 +307,71 @@ function M.install_worker(notify, callback)
   if notify then
     progress_update("install", "Installing render-latex worker...", "running", 5)
   end
-  vim.system(command, { text = true }, function(result)
-    vim.schedule(function()
-      install_running = false
-      if result.code ~= 0 then
-        local stderr = vim.trim(result.stderr or "")
-        local err = "failed to download render-latex worker"
-        if stderr ~= "" then
-          err = err .. ": " .. stderr
+  local function run_download()
+    command = download_command(urls[attempt], tmp_path)
+    vim.system(command, { text = true }, function(result)
+      vim.schedule(function()
+        if result.code ~= 0 then
+          local stderr = vim.trim(result.stderr or "")
+          local err = "failed to download render-latex worker"
+          if stderr ~= "" then
+            err = err .. ": " .. stderr
+          end
+          if urls[attempt + 1] ~= nil then
+            pcall(vim.fn.delete, tmp_path)
+            attempt = attempt + 1
+            run_download()
+            return
+          end
+          install_running = false
+          install_error = err
+          pcall(vim.fn.delete, tmp_path)
+          if notify then
+            progress_update("install", err, "error", 100)
+            progress_ids.install = nil
+          end
+          if callback ~= nil then
+            callback(nil, err)
+          end
+          return
         end
-        install_error = err
-        pcall(vim.fn.delete, tmp_path)
+
+        install_running = false
+        if not final_path:match("%.exe$") then
+          pcall(vim.uv.fs_chmod, tmp_path, tonumber("755", 8))
+        end
+        pcall(vim.fn.delete, final_path)
+        local rename_ok, rename_err = vim.uv.fs_rename(tmp_path, final_path)
+        if not rename_ok then
+          install_error = tostring(rename_err)
+          if notify then
+            progress_update(
+              "install",
+              "failed to install render-latex worker: " .. tostring(rename_err),
+              "error",
+              100
+            )
+            progress_ids.install = nil
+          end
+          if callback ~= nil then
+            callback(nil, tostring(rename_err))
+          end
+          return
+        end
+
         if notify then
-          progress_update("install", err, "error", 100)
+          progress_update("install", "Installed render-latex worker", "success", 100)
           progress_ids.install = nil
         end
+        emit_worker_ready(final_path, "install")
         if callback ~= nil then
-          callback(nil, err)
+          callback(final_path, nil)
         end
-        return
-      end
-
-      if not final_path:match("%.exe$") then
-        pcall(vim.uv.fs_chmod, tmp_path, tonumber("755", 8))
-      end
-      pcall(vim.fn.delete, final_path)
-      local rename_ok, rename_err = vim.uv.fs_rename(tmp_path, final_path)
-      if not rename_ok then
-        install_error = tostring(rename_err)
-        if notify then
-          progress_update(
-            "install",
-            "failed to install render-latex worker: " .. tostring(rename_err),
-            "error",
-            100
-          )
-          progress_ids.install = nil
-        end
-        if callback ~= nil then
-          callback(nil, tostring(rename_err))
-        end
-        return
-      end
-
-      if notify then
-        progress_update("install", "Installed render-latex worker", "success", 100)
-        progress_ids.install = nil
-      end
-      emit_worker_ready(final_path, "install")
-      if callback ~= nil then
-        callback(final_path, nil)
-      end
+      end)
     end)
-  end)
+  end
+
+  run_download()
 end
 
 ---@param callback? fun(path: string?, err: string?)

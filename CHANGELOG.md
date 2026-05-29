@@ -8,6 +8,8 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Changed
 
+- Added prebuilt worker support for Linux ARM64 / Asahi Linux.
+- Added a temporary Linux ARM64 installer fallback from the latest release to the `unreleased` prerelease until the next tagged release publishes a Linux ARM64 worker asset.
 - Switched non-tmux Kitty graphics detection from terminal-specific environment checks to a protocol probe with cached results.
 - Made `:RenderLatex build` run asynchronously and refresh visible buffers through the same worker-ready path used by installs.
 - Switched long-running worker build and install commands to native Neovim progress messages.
@@ -15,12 +17,19 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Requeued all visible buffers on `ColorScheme` so theme switches rerender visible equations automatically.
 - Optimized scrolling by adding a lightweight `WinScrolled` refresh path, coalescing repeated scroll events, and batching Kitty placement updates.
 - Added fold-aware visibility so equations inside closed folds stay hidden until the fold is opened again.
+- Added virtual padding for inline math conceals in Markdown pipe tables so table borders keep their expected width more often.
+- Improved first-run worker install scheduling so plugin-manager options can override defaults before automatic installs start.
+- Improved worker error reporting and shutdown handling.
 
 ### Fixed
 
 - Fixed Ghostty and other Kitty graphics-compatible terminals being reported as unsupported outside tmux.
 - Avoided noisy worker-unavailable warnings while a worker build is in progress.
 - Fixed repro configs to resolve the plugin root relative to `repro/common.lua` instead of using a machine-specific absolute path.
+- Fixed stale cached equations after line deletions, including deleting display math at end of file.
+- Fixed render scheduling while floating UI is visible so work can still reach the worker while image placement stays suppressed.
+- Fixed configured `worker.bin` status and health reporting when the configured path is not executable.
+- Avoided repeated full-buffer inline fallback scans for buffers with no display equations.
 
 ## 0.1.0-rc2 - 2026-05-16
 

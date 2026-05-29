@@ -70,9 +70,9 @@ The goal is intentionally narrow: make equations in Markdown easier to read in N
 - Neovim 0.10+ with `vim.system`, `vim.uv`, `vim.fs`, extmarks, and Treesitter APIs.
 - A display-image backend: Neovim image API support or a Kitty graphics-compatible terminal.
 - For tmux image rendering: `set -g allow-passthrough on`.
-- Prebuilt workers are published with releases for Linux x64, macOS x64, macOS arm64, and Windows x64.
+- Prebuilt workers are published with releases for Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64.
 
-Rust is only needed for development, source builds, or unsupported prebuilt platforms such as Linux ARM64.
+Rust is only needed for development, source builds, or unsupported prebuilt platforms.
 
 ## Configuration
 

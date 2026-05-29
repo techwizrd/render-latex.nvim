@@ -24,6 +24,9 @@ jobs:
           - os: ubuntu-latest
             asset: render-latex-worker-linux-x64
             binary: target/release/render-latex-worker
+          - os: ubuntu-24.04-arm
+            asset: render-latex-worker-linux-arm64
+            binary: target/release/render-latex-worker
           - os: macos-15-intel
             asset: render-latex-worker-macos-x64
             binary: target/release/render-latex-worker
