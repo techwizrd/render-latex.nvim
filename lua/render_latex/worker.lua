@@ -16,6 +16,30 @@ local state = {
   stopping = false,
 }
 
+local function stderr_tail()
+  local stderr = vim.trim(table.concat(state.stderr_chunks))
+  if stderr == "" then
+    return nil
+  end
+  if #stderr > 1000 then
+    stderr = stderr:sub(#stderr - 999)
+  end
+  return stderr
+end
+
+local function close_handle(handle)
+  if handle ~= nil and not handle:is_closing() then
+    handle:close()
+  end
+end
+
+local function close_process_handles()
+  close_handle(state.handle)
+  close_handle(state.stdin)
+  close_handle(state.stdout)
+  close_handle(state.stderr)
+end
+
 local function json_nil_to_nil(value)
   if value == vim.NIL then
     return nil
@@ -31,9 +55,11 @@ local function json_nil_to_nil(value)
 end
 
 local function reset_state(notify_pending)
+  local stderr = stderr_tail()
+  local exit_err = stderr ~= nil and ("worker exited: " .. stderr) or "worker exited"
   for id, callback in pairs(state.pending) do
     if notify_pending then
-      callback(nil, "worker exited")
+      callback(nil, exit_err)
     end
     state.pending[id] = nil
   end
@@ -111,6 +137,7 @@ local function start_worker()
     stdio = { stdin, stdout, stderr },
   }, function()
     vim.schedule(function()
+      close_process_handles()
       reset_state(not state.stopping)
     end)
   end)
@@ -174,7 +201,17 @@ function M.request(method, params, callback)
   })
   local frame = ("Content-Length: %d\r\n\r\n%s"):format(#message, message)
 
-  state.stdin:write(frame)
+  state.stdin:write(frame, function(err)
+    if err == nil then
+      return
+    end
+    vim.schedule(function()
+      if state.pending[id] ~= nil then
+        state.pending[id] = nil
+        callback(nil, "worker write failed: " .. tostring(err))
+      end
+    end)
+  end)
 end
 
 ---@param items table[]
@@ -190,18 +227,7 @@ function M.stop()
 
   state.stopping = true
   M.request("shutdown", {}, function() end)
-  if not state.handle:is_closing() then
-    state.handle:close()
-  end
-  if state.stdin ~= nil and not state.stdin:is_closing() then
-    state.stdin:close()
-  end
-  if state.stdout ~= nil and not state.stdout:is_closing() then
-    state.stdout:close()
-  end
-  if state.stderr ~= nil and not state.stderr:is_closing() then
-    state.stderr:close()
-  end
+  close_process_handles()
   reset_state(false)
 end
 

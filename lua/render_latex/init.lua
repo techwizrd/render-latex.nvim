@@ -40,7 +40,7 @@ local function register_autocmds()
     Renderer.set_suppressed("cmdline", Config.render.hide_on_cmdline and in_cmdline)
     Renderer.set_suppressed("floating", Ui.has_popup_or_floating_windows())
     local status = Renderer.suppression_status()
-    local allowed = not in_cmdline and not status.cmdline and not status.floating
+    local allowed = not in_cmdline and not status.cmdline
     if queue_after and allowed then
       queue_visible_buffers()
     end
@@ -191,7 +191,9 @@ function M.setup(opts)
     worker_ready_listener_registered = true
   end
   M.did_setup = true
-  Install.ensure_installed_async()
+  vim.schedule(function()
+    Install.ensure_installed_async()
+  end)
   if Config.tmux.install_cleanup_hooks then
     require("render_latex.tmux").install_cleanup_hooks()
   end
@@ -292,7 +294,7 @@ function M.doctor_lines()
     "conceallevel: " .. tostring(vim.wo.conceallevel),
     "concealcursor: " .. tostring(vim.wo.concealcursor),
     "suppressed by cmdline: " .. tostring(suppression.cmdline),
-    "suppressed by popups/floating windows: " .. tostring(suppression.floating),
+    "image placement suppressed by popups/floating windows: " .. tostring(suppression.floating),
     "",
     "## Worker",
     "",
@@ -306,6 +308,10 @@ function M.doctor_lines()
     "building: " .. tostring(install.building),
     "installing: " .. tostring(install.installing),
   })
+
+  if install.path_error ~= nil then
+    lines[#lines + 1] = "worker path error: " .. install.path_error
+  end
 
   if install.build_error ~= nil then
     lines[#lines + 1] = "last build error: " .. install.build_error

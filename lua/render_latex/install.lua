@@ -129,7 +129,15 @@ end
 
 function M.worker_info()
   if Config.worker.bin ~= nil and Config.worker.bin ~= "" then
-    return { path = Config.worker.bin, source = "config" }
+    local path = vim.fn.expand(Config.worker.bin)
+    if vim.fn.executable(path) == 1 then
+      return { path = path, source = "config" }
+    end
+    return {
+      path = nil,
+      source = "config",
+      error = "configured worker.bin is not executable: " .. path,
+    }
   end
 
   local managed_path = M.managed_worker_path()
@@ -171,8 +179,8 @@ function M.build_worker(notify, callback)
   end
 
   vim.system(command, { cwd = Util.root(), text = true }, function(result)
-    build_running = false
     vim.schedule(function()
+      build_running = false
       local path = M.local_worker_path()
       if result.code ~= 0 then
         local stderr = vim.trim(result.stderr or "")
@@ -283,8 +291,8 @@ function M.install_worker(notify, callback)
     progress_update("install", "Installing render-latex worker...", "running", 5)
   end
   vim.system(command, { text = true }, function(result)
-    install_running = false
     vim.schedule(function()
+      install_running = false
       if result.code ~= 0 then
         local stderr = vim.trim(result.stderr or "")
         local err = "failed to download render-latex worker"
@@ -368,6 +376,7 @@ function M.status()
     installing = install_running,
     build_error = build_error,
     last_error = install_error,
+    path_error = info.error,
   }
 end
 

@@ -944,6 +944,26 @@ describe("render_latex.install", function()
 end)
 
 describe("render_latex.setup", function()
+  it("defers automatic install until user setup options are applied", function()
+    local previous_ensure = install.ensure_installed_async
+    local auto_values = {}
+
+    install.ensure_installed_async = function()
+      auto_values[#auto_values + 1] = config.install.auto
+    end
+
+    render_latex.setup()
+    render_latex.setup({ install = { auto = false } })
+
+    vim.wait(100, function()
+      return #auto_values >= 2
+    end)
+
+    install.ensure_installed_async = previous_ensure
+
+    assert.are.same({ false, false }, auto_values)
+  end)
+
   it("can be called repeatedly without duplicating autocmds", function()
     render_latex.setup({ install = { auto = false }, render = { inline = "highlight" } })
     local first = #vim.api.nvim_get_autocmds({ group = config.augroup })
@@ -1066,6 +1086,46 @@ describe("render_latex.setup", function()
 
     assert.are.same({ buf }, scrolled)
     assert.are.same({}, queued)
+  end)
+
+  it("queues visible buffers while floating windows are suppressed", function()
+    local previous_queue = renderer.queue
+    local previous_attach = renderer.attach
+    local previous_suppression = renderer.suppression_status
+    local previous_set_suppressed = renderer.set_suppressed
+    local previous_has_popup = ui.has_popup_or_floating_windows
+    local previous_getcmdtype = vim.fn.getcmdtype
+    local queued = {}
+
+    renderer.queue = function(bufnr)
+      queued[#queued + 1] = bufnr
+    end
+    renderer.attach = function() end
+    renderer.suppression_status = function()
+      return { cmdline = false, floating = true }
+    end
+    renderer.set_suppressed = function() end
+    ui.has_popup_or_floating_windows = function()
+      return true
+    end
+    vim.fn.getcmdtype = function()
+      return ""
+    end
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].filetype = "markdown"
+    render_latex.setup({ install = { auto = false } })
+
+    vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf, modeline = false })
+
+    renderer.queue = previous_queue
+    renderer.attach = previous_attach
+    renderer.suppression_status = previous_suppression
+    renderer.set_suppressed = previous_set_suppressed
+    ui.has_popup_or_floating_windows = previous_has_popup
+    vim.fn.getcmdtype = previous_getcmdtype
+
+    assert.are.same({ buf }, queued)
   end)
 end)
 
@@ -1447,9 +1507,33 @@ end)
 
 describe("render_latex.install", function()
   it("resolves configured worker path", function()
+    local previous_executable = vim.fn.executable
+    vim.fn.executable = function(path)
+      return path == "/tmp/render-latex-worker-test" and 1 or 0
+    end
+
     config.setup({ worker = { bin = "/tmp/render-latex-worker-test" } })
     assert.are.equal("/tmp/render-latex-worker-test", install.ensure_worker_path())
+
+    vim.fn.executable = previous_executable
     config.setup()
+  end)
+
+  it("reports configured worker paths that are not executable", function()
+    local previous_executable = vim.fn.executable
+    vim.fn.executable = function()
+      return 0
+    end
+
+    config.setup({ worker = { bin = "/tmp/missing-render-latex-worker" } })
+    local status = install.status()
+
+    vim.fn.executable = previous_executable
+    config.setup()
+
+    assert.is_nil(status.path)
+    assert.are.equal("config", status.source)
+    assert.matches("not executable", status.path_error)
   end)
 end)
 
@@ -1624,6 +1708,41 @@ describe("render_latex.renderer", function()
     end)
   end)
 
+  it("does not repeatedly scan buffers that contain no display equations", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode }, render = { inline = false } })
+    local previous_detect_scan = detect.scan
+    local previous_backend_status = image_backend.status
+    local previous_viewport_range = viewport.viewport_range
+    local scan_count = 0
+
+    detect.scan = function()
+      scan_count = scan_count + 1
+      return {}
+    end
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plain text", "more text" })
+
+    renderer.set_suppressed("cmdline", false)
+    renderer.set_suppressed("floating", false)
+    renderer.render(buf)
+    renderer.render(buf)
+
+    detect.scan = previous_detect_scan
+    image_backend.status = previous_backend_status
+    viewport.viewport_range = previous_viewport_range
+
+    assert.are.equal(1, scan_count)
+  end)
+
   it("can inspect and toggle the current equation", function()
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_set_current_buf(buf)
@@ -1666,6 +1785,173 @@ describe("render_latex.renderer", function()
     local state = renderer.suppression_status()
     assert.is_true(state.cmdline)
     renderer.set_suppressed("cmdline", false)
+  end)
+
+  it("does not repeatedly clear images when suppression state is unchanged", function()
+    local previous_backend_get = image_backend.get
+    local delete_count = 0
+
+    image_backend.get = function()
+      return {
+        del = function()
+          delete_count = delete_count + 1
+        end,
+      },
+        "test"
+    end
+
+    renderer.set_suppressed("floating", false)
+    renderer.set_suppressed("floating", true)
+    renderer.set_suppressed("floating", true)
+    renderer.set_suppressed("floating", false)
+    image_backend.get = previous_backend_get
+
+    assert.are.equal(1, delete_count)
+  end)
+
+  it("requests equation renders while floating windows are suppressed", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_viewport_range = viewport.viewport_range
+    local request_count = 0
+    local requested_items
+
+    local backend = {
+      del = function() end,
+      set = function()
+        return 1
+      end,
+    }
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    image_backend.get = function()
+      return backend, "test"
+    end
+    worker.request_batch = function(items, callback)
+      request_count = request_count + 1
+      requested_items = items
+      callback(nil, "worker installing")
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+    vim.api.nvim_win_set_cursor(0, { 4, 0 })
+
+    renderer.set_suppressed("cmdline", false)
+    renderer.set_suppressed("floating", true)
+    renderer.attach(buf)
+    renderer.render(buf)
+    renderer.set_suppressed("floating", false)
+
+    worker.request_batch = previous_request_batch
+    viewport.viewport_range = previous_viewport_range
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+
+    assert.are.equal(1, request_count)
+    assert.are.equal(1, #requested_items)
+    assert.are.equal("x^2", requested_items[1].formula)
+  end)
+
+  it("does not place existing equation images while floating windows are suppressed", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_detect_scan = detect.scan
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
+    local previous_readblob = vim.fn.readblob
+    local set_count = 0
+    local del_count = 0
+
+    local backend = {
+      del = function()
+        del_count = del_count + 1
+      end,
+      set = function()
+        set_count = set_count + 1
+        return set_count
+      end,
+    }
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    image_backend.get = function()
+      return backend, "test"
+    end
+    worker.request_batch = function(_, callback)
+      callback({
+        {
+          error = nil,
+          result = {
+            width_px = 10,
+            height_px = 10,
+            png_path = "/tmp/render-latex-floating-refresh-test.png",
+            cache_key = "floating-refresh-test",
+          },
+        },
+      }, nil)
+    end
+    detect.scan = function()
+      return {
+        {
+          key = "display:1:3",
+          start_row = 0,
+          end_row = 2,
+          text = "x^2",
+          quoted = false,
+        },
+      }
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 20
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+    vim.api.nvim_win_set_cursor(0, { 4, 0 })
+
+    renderer.set_suppressed("cmdline", false)
+    renderer.set_suppressed("floating", false)
+    renderer.attach(buf)
+    renderer.render(buf)
+    vim.wait(100, function()
+      return set_count == 1
+    end)
+
+    set_count = 0
+    del_count = 0
+    renderer.set_suppressed("floating", true)
+    renderer.refresh_visible(buf)
+    renderer.set_suppressed("floating", false)
+
+    worker.request_batch = previous_request_batch
+    detect.scan = previous_detect_scan
+    viewport.viewport_range = previous_viewport_range
+    viewport.visible_text_bounds = previous_visible_text_bounds
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    vim.fn.readblob = previous_readblob
+
+    assert.are.equal(0, set_count)
+    assert.is_true(del_count > 0)
   end)
 
   it("preserves equation state in unsupported transient modes", function()

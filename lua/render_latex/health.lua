@@ -28,6 +28,8 @@ function M.check()
   local backend = ImageBackend.status()
   if backend.available then
     vim.health.ok("image backend: " .. backend.name)
+  elseif backend.kitty_probing then
+    vim.health.info("image backend: probing Kitty graphics support; rerun health shortly")
   else
     vim.health.warn("image backend unavailable: " .. (backend.reason or backend.name))
   end
@@ -79,7 +81,13 @@ function M.check()
   local install = Install.status()
   vim.health.info("detected platform: " .. tostring(install.system or "<unsupported>"))
   vim.health.info("install source: " .. install.repository .. " (" .. install.version .. ")")
-  if install.path == nil then
+  if install.path_error ~= nil then
+    vim.health.warn(install.path_error)
+  elseif install.installing then
+    vim.health.info("worker binary is being installed in the background")
+  elseif install.building then
+    vim.health.info("worker binary is being built in the background")
+  elseif install.path == nil then
     vim.health.warn(
       "worker binary not found. Run :RenderLatex install, :RenderLatex build, or configure worker.bin."
     )

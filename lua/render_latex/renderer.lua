@@ -16,8 +16,8 @@ local suppression = {
 }
 local last_backend_warning
 
-local function is_suppressed()
-  return suppression.cmdline or suppression.floating
+local function should_skip_render_loop()
+  return suppression.cmdline
 end
 
 ---@class render_latex.BufferState
@@ -31,6 +31,7 @@ end
 ---@field focused_keys table<integer, string>
 ---@field dirty table<string, boolean>
 ---@field equations table[]
+---@field scanned boolean
 ---@field attached boolean
 ---@field inline_marks integer[]
 ---@field manual_raw table<string, boolean>
@@ -77,6 +78,7 @@ local function get_buffer_state(bufnr)
     focused_keys = {},
     dirty = {},
     equations = {},
+    scanned = false,
     attached = false,
     inline_marks = {},
     manual_raw = {},
@@ -258,7 +260,7 @@ local function clear_marks(bufnr)
   state.label_layouts = {}
 end
 
-local function clear_equation_display(bufnr, key)
+local function clear_equation_display(bufnr, key, backend, backend_resolved)
   local state = buffers[bufnr]
   if state == nil then
     return
@@ -273,7 +275,9 @@ local function clear_equation_display(bufnr, key)
   Annotations.clear_placeholder(bufnr, Config.ns, state, key)
   Annotations.clear_label(bufnr, Config.ns, state, key)
 
-  local backend = ImageBackend.get()
+  if not backend_resolved then
+    backend = ImageBackend.get()
+  end
   with_backend_batch(backend, function()
     for winid, image_ids in pairs(state.images) do
       local image_id = image_ids[key]
@@ -329,8 +333,9 @@ end
 
 equations = function(bufnr)
   local state = get_buffer_state(bufnr)
-  if #state.equations == 0 then
+  if not state.scanned then
     state.equations = Detect.scan(bufnr)
+    state.scanned = true
   end
   return state.equations
 end
@@ -406,6 +411,7 @@ function M.clear(bufnr)
     state.focused_keys = {}
     state.dirty = {}
     state.equations = {}
+    state.scanned = false
     state.failures = {}
     state.manual_raw = {}
     state.viewports = {}
@@ -432,6 +438,7 @@ function M.clear_all()
     state.focused_keys = {}
     state.dirty = {}
     state.equations = {}
+    state.scanned = false
     state.failures = {}
     state.manual_raw = {}
     state.viewports = {}
@@ -456,6 +463,18 @@ function M.hide_all()
     state.images = {}
     state.placements = {}
     state.scroll_scheduled = false
+  end
+end
+
+local function hide_visible()
+  local backend = ImageBackend.get()
+  if backend ~= nil then
+    pcall(backend.del, math.huge)
+  end
+
+  for _, state in pairs(buffers) do
+    state.images = {}
+    state.placements = {}
   end
 end
 
@@ -747,6 +766,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
   local option_cache = {}
   local backend_status = ImageBackend.status()
   local backend = backend_status.available and ImageBackend.get() or nil
+  local floating_suppressed = suppression.floating
   local needs_render = false
   local focused = active_focus_counts(state.focused_keys)
 
@@ -756,9 +776,18 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
       active[equation.key] = true
       local meta = state.metadata[equation.key]
       if focused[equation.key] then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] or state.delayed_render[equation.key] then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
+      elseif floating_suppressed then
+        clear_equation_display(bufnr, equation.key, backend, true)
+        if
+          meta == nil
+          or meta.render_fingerprint
+            ~= render_fingerprint(cached_render_options(option_cache, equation))
+        then
+          needs_render = true
+        end
       elseif
         meta == nil
         or meta.render_fingerprint
@@ -766,7 +795,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
       then
         needs_render = true
       elseif backend == nil then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
         if last_backend_warning ~= backend_status.reason then
           last_backend_warning = backend_status.reason
           Util.warn(backend_status.reason or "No image backend is available")
@@ -881,7 +910,7 @@ function M.render(bufnr)
   if not Util.buf_is_valid(bufnr) then
     return
   end
-  if is_suppressed() then
+  if should_skip_render_loop() then
     M.hide_all()
     return
   end
@@ -908,6 +937,7 @@ function M.render(bufnr)
   local active_images = {}
   local backend_status = ImageBackend.status()
   local backend = backend_status.available and ImageBackend.get() or nil
+  local floating_suppressed = suppression.floating
   local batch = {}
   local visible_index = 0
   local option_cache = {}
@@ -918,13 +948,22 @@ function M.render(bufnr)
       active[equation.key] = true
       local meta = state.metadata[equation.key]
       if focused_keys[equation.key] then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.delayed_render[equation.key] then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
+      elseif floating_suppressed then
+        clear_equation_display(bufnr, equation.key, backend, true)
+        if
+          meta == nil
+          or meta.render_fingerprint
+            ~= render_fingerprint(cached_render_options(option_cache, equation))
+        then
+          batch[#batch + 1] = equation
+        end
       elseif not backend_status.available then
-        clear_equation_display(bufnr, equation.key)
+        clear_equation_display(bufnr, equation.key, backend, true)
         if last_backend_warning ~= backend_status.reason then
           last_backend_warning = backend_status.reason
           Util.warn(backend_status.reason or "No image backend is available")
@@ -957,7 +996,7 @@ function M.refresh_visible(bufnr)
   if not Util.buf_is_valid(bufnr) then
     return
   end
-  if is_suppressed() then
+  if should_skip_render_loop() then
     return
   end
 
@@ -1036,6 +1075,7 @@ function M.attach(bufnr)
   end
 
   state.equations = Detect.scan(bufnr)
+  state.scanned = true
   state.attached = true
 
   vim.api.nvim_buf_attach(bufnr, false, {
@@ -1046,6 +1086,7 @@ function M.attach(bufnr)
       end
       current.equations =
         Detect.update(current.equations, buffer, firstline, lastline - 1, new_lastline - 1)
+      current.scanned = true
     end,
     on_detach = function(_, buffer)
       local current = buffers[buffer]
@@ -1177,9 +1218,14 @@ end
 ---@param reason 'cmdline'|'floating'
 ---@param value boolean
 function M.set_suppressed(reason, value)
+  if suppression[reason] == value then
+    return
+  end
   suppression[reason] = value
-  if is_suppressed() then
+  if suppression.cmdline then
     M.hide_all()
+  elseif suppression.floating then
+    hide_visible()
   end
 end
 

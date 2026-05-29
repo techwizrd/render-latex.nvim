@@ -434,15 +434,16 @@ end
 function M.set_equation_label(bufnr, ns, state, equation, index)
   local style = Config.render.equation_labels
   if not style or style == false then
+    M.clear_label(bufnr, ns, state, equation.key)
     return
   end
 
-  M.clear_label(bufnr, ns, state, equation.key)
   local label = Config.render.equation_label_format:format(index)
   local layout = table.concat({ equation.start_row, style, label }, ":")
   if state.labels[equation.key] ~= nil and state.label_layouts[equation.key] == layout then
     return
   end
+  M.clear_label(bufnr, ns, state, equation.key)
   local opts = { priority = 240 }
 
   if style == "right" or style == "both" then
