@@ -36,6 +36,9 @@ jobs:
           - os: windows-2025
             asset: render-latex-worker-windows-x64.exe
             binary: target/release/render-latex-worker.exe
+          - os: windows-11-arm
+            asset: render-latex-worker-windows-arm64.exe
+            binary: target/release/render-latex-worker.exe
     steps:
       - uses: actions/checkout@v6
         with:

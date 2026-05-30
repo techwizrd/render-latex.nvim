@@ -818,6 +818,7 @@ describe("render_latex.install", function()
     assert.are.equal("macos-x64", install._system_key_from_uname("Darwin", "x86_64"))
     assert.are.equal("macos-arm64", install._system_key_from_uname("Darwin", "arm64"))
     assert.are.equal("windows-x64", install._system_key_from_uname("Windows_NT", "AMD64"))
+    assert.are.equal("windows-arm64", install._system_key_from_uname("Windows_NT", "ARM64"))
     assert.is_nil(install._system_key_from_uname("Plan9", "x86_64"))
   end)
 
@@ -1058,6 +1059,59 @@ describe("render_latex.install", function()
     assert.are.equal(1, #commands)
     assert.is_nil(callback_path)
     assert.matches("failed to download render%-latex worker", callback_err)
+    assert.is_false(install.status().installing)
+  end)
+
+  it("falls back to unreleased for latest Windows ARM64 installs", function()
+    local commands = {}
+    local callbacks = {}
+    local callback_path, callback_err
+
+    config.setup({ install = { repository = "techwizrd/render-latex.nvim", version = "latest" } })
+    vim.uv.os_uname = function()
+      return { sysname = "Windows_NT", machine = "ARM64" }
+    end
+    vim.fn.executable = function(name)
+      return name == "curl" and 1 or 0
+    end
+    vim.fn.mkdir = function() end
+    vim.fn.delete = function() end
+    vim.uv.fs_rename = function()
+      return true
+    end
+    vim.system = function(command, _, callback)
+      commands[#commands + 1] = command
+      callbacks[#callbacks + 1] = callback
+      return {}
+    end
+
+    install.install_worker(false, function(path, err)
+      callback_path = path
+      callback_err = err
+    end)
+
+    assert.matches(
+      "/releases/latest/download/render%-latex%-worker%-windows%-arm64%.exe$",
+      commands[1][7]
+    )
+    callbacks[1]({ code = 22, stderr = "404" })
+
+    vim.wait(100, function()
+      return #commands == 2
+    end)
+
+    assert.matches(
+      "/releases/download/unreleased/render%-latex%-worker%-windows%-arm64%.exe$",
+      commands[2][7]
+    )
+    callbacks[2]({ code = 0, stderr = "" })
+
+    vim.wait(100, function()
+      return callback_path ~= nil or callback_err ~= nil
+    end)
+
+    assert.are.equal(install.managed_worker_path(), callback_path)
+    assert.is_nil(callback_err)
     assert.is_false(install.status().installing)
   end)
 end)

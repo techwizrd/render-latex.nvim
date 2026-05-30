@@ -163,6 +163,7 @@ The runtime installer expects direct executable release assets with these names:
 - `render-latex-worker-macos-x64`
 - `render-latex-worker-macos-arm64`
 - `render-latex-worker-windows-x64.exe`
+- `render-latex-worker-windows-arm64.exe`
 
 The release and unreleased workflows upload `SHA256SUMS`. The installer does not verify checksums yet; let's keep this as a future hardening task unless release security requirements change.
 
@@ -184,7 +185,7 @@ Before tagging a release:
 
 ## CI Notes
 
-CI runs Lua/Neovim tests on Linux and worker builds on Linux, macOS, and Windows. The release workflow publishes stable tagged assets, and the unreleased workflow refreshes rolling prerelease assets on pushes to `main`.
+CI runs Lua/Neovim tests on Linux and worker builds on Linux, macOS, Windows x64, and Windows arm64. The release workflow publishes stable tagged assets, and the unreleased workflow refreshes rolling prerelease assets on pushes to `main`.
 
 `Cargo.lock` is committed intentionally so worker release builds are reproducible.
 

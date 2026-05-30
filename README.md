@@ -70,7 +70,7 @@ The goal is intentionally narrow: make equations in Markdown easier to read in N
 - Neovim 0.10+ with `vim.system`, `vim.uv`, `vim.fs`, extmarks, and Treesitter APIs.
 - A display-image backend: Neovim image API support or a Kitty graphics-compatible terminal.
 - For tmux image rendering: `set -g allow-passthrough on`.
-- Prebuilt workers are published with releases for Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64.
+- Prebuilt workers are published with releases for Linux x64, macOS x64, macOS arm64, and Windows x64. Linux arm64 and Windows arm64 currently fall back to the rolling `unreleased` prerelease on `install.version = "latest"` until the next tagged release includes those assets.
 
 Rust is only needed for development, source builds, or unsupported prebuilt platforms.
 
@@ -171,7 +171,7 @@ This is an early release. The defaults are meant to be fast and friendly, but op
 
 Before the first stable release, I still want to:
 
-- [ ] Verify GitHub CI and release assets on Windows.
+- [ ] Verify GitHub CI and release assets on Windows x64 and arm64.
 - [x] Confirm `:RenderLatex install` works from a clean install.
 - [x] Smoke-test the documented lazy.nvim and `vim.pack` setup paths.
 - [x] Check whether downloaded workers hit Gatekeeper/quarantine issues on macOS.

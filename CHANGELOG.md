@@ -9,7 +9,8 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 ### Changed
 
 - Added prebuilt worker support for Linux ARM64 / Asahi Linux.
-- Added a temporary Linux ARM64 installer fallback from the latest release to the `unreleased` prerelease until the next tagged release publishes a Linux ARM64 worker asset.
+- Added Windows ARM64 worker builds to CI plus release and unreleased prebuilt assets.
+- Added temporary `latest` installer fallbacks from tagged releases to the rolling `unreleased` prerelease for Linux ARM64 and Windows ARM64 until the next tagged release publishes those worker assets.
 - Switched non-tmux Kitty graphics detection from terminal-specific environment checks to a protocol probe with cached results.
 - Made `:RenderLatex build` run asynchronously and refresh visible buffers through the same worker-ready path used by installs.
 - Switched long-running worker build and install commands to native Neovim progress messages.

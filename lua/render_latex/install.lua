@@ -127,7 +127,10 @@ function M.asset_url()
 end
 
 local function fallback_asset_url(system_key)
-  if Config.install.version == "latest" and system_key == "linux-arm64" then
+  if
+    Config.install.version == "latest"
+    and (system_key == "linux-arm64" or system_key == "windows-arm64")
+  then
     return asset_url_for_version(system_key, "unreleased")
   end
   return nil
