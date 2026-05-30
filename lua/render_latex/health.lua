@@ -33,8 +33,10 @@ function M.check()
   else
     vim.health.warn("image backend unavailable: " .. (backend.reason or backend.name))
   end
-  if backend.tmux then
-    vim.health.warn("tmux detected; render-latex is using kitty passthrough wrapping")
+  if backend.tmux and backend.available and backend.name == "kitty" then
+    vim.health.warn("tmux detected; render-latex is using Kitty passthrough wrapping")
+  elseif backend.tmux then
+    vim.health.info("tmux detected")
   end
 
   if backend.tmux and vim.fn.executable("tmux") == 1 then

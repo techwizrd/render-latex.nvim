@@ -36,6 +36,8 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Fixed rendering startup when the `markdown_inline` Treesitter query/parser is unavailable by falling back to non-Treesitter display math detection.
 - Fixed tmux backend diagnostics so passthrough-disabled sessions are reported clearly and explicit Kitty configuration can force passthrough when terminal markers are unavailable inside tmux.
 - Fixed stuck worker requests by timing out hung requests, terminating stale worker handles safely, and scheduling bounded render retries after worker reset errors.
+- Fixed tmux health and doctor diagnostics so they no longer claim Kitty passthrough is in use when the Neovim image backend is selected.
+- Clarified doctor diagnostics by using `status` and `suggested action` labels instead of overloading `recommendation`.
 
 ## 0.1.0-rc2 - 2026-05-16
 

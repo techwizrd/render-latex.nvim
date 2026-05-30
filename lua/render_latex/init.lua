@@ -7,6 +7,16 @@ local queue_after_worker_ready
 local worker_ready = false
 local worker_ready_listener_registered = false
 
+local function image_backend_status(backend)
+  if backend.available then
+    return "ready"
+  end
+  if backend.kitty_probing then
+    return "probing Kitty graphics"
+  end
+  return backend.reason or "<unknown>"
+end
+
 local function should_attach(bufnr)
   local Config = require("render_latex.config")
   return Config.enabled and Config.is_filetype_supported(vim.bo[bufnr].filetype)
@@ -279,11 +289,12 @@ function M.doctor_lines()
     "",
     "image backend: " .. backend.name,
     "image backend available: " .. tostring(backend.available),
-    "image backend reason: " .. tostring(backend.reason or "<none>"),
+    "image backend status: " .. image_backend_status(backend),
     "vim.ui.img available: " .. tostring(backend.builtin_available),
     "kitty available: " .. tostring(backend.kitty_available),
     "kitty probing: " .. tostring(backend.kitty_probing),
     "tmux detected: " .. tostring(backend.tmux),
+    "tmux passthrough: " .. tostring(backend.tmux_passthrough),
     "foreground: "
       .. tostring(render.foreground)
       .. " ("
@@ -323,7 +334,7 @@ function M.doctor_lines()
 
   if install.path == nil then
     lines[#lines + 1] =
-      "recommendation: run :RenderLatex install, :RenderLatex build, or configure worker.bin"
+      "suggested action: run :RenderLatex install, :RenderLatex build, or configure worker.bin"
   end
 
   local render_markdown = integrations.render_markdown
@@ -341,7 +352,10 @@ function M.doctor_lines()
     lines[#lines + 1] = "latex enabled: " .. tostring(render_markdown.latex_enabled)
   end
   lines[#lines + 1] = "conflict: " .. tostring(render_markdown.conflict)
-  lines[#lines + 1] = "recommendation: " .. tostring(render_markdown.recommendation)
+  lines[#lines + 1] = "status: " .. tostring(render_markdown.status)
+  if render_markdown.action ~= nil then
+    lines[#lines + 1] = "suggested action: " .. render_markdown.action
+  end
 
   local obsidian = integrations.obsidian
   vim.list_extend(lines, {
@@ -350,7 +364,7 @@ function M.doctor_lines()
     "",
     "loaded: " .. tostring(obsidian.loaded),
     "workspace: " .. tostring(obsidian.workspace or "<unknown>"),
-    "recommendation: " .. tostring(obsidian.recommendation),
+    "status: " .. tostring(obsidian.status),
     "",
     "## Notes",
     "",
@@ -399,7 +413,12 @@ function M.tmux_check()
     "",
     "tmux detected: " .. tostring(backend.tmux),
     "backend: " .. backend.name,
+    "backend available: " .. tostring(backend.available),
+    "image backend status: " .. image_backend_status(backend),
     "builtin vim.ui.img: " .. tostring(backend.builtin_available),
+    "kitty available: " .. tostring(backend.kitty_available),
+    "kitty probing: " .. tostring(backend.kitty_probing),
+    "tmux passthrough: " .. tostring(backend.tmux_passthrough),
     "TERM: " .. (vim.env.TERM or ""),
   }
 

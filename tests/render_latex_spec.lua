@@ -1283,11 +1283,35 @@ describe("render_latex.doctor", function()
     local text = table.concat(lines, "\n")
 
     assert.matches("# render%-latex doctor", text)
+    assert.matches("image backend status", text)
     assert.matches("hide on cmdline", text)
     assert.matches("kitty probing", text)
+    assert.matches("tmux passthrough", text)
     assert.matches("## render%-markdown.nvim", text)
+    assert.matches("status:", text)
     assert.matches("## obsidian.nvim", text)
     assert.matches("The render loop does not inspect other plugins", text)
+  end)
+
+  it("includes backend availability in tmux diagnostics", function()
+    local previous_open_scratch = util.open_scratch
+    local opened
+    util.open_scratch = function(lines, filetype)
+      opened = { lines = lines, filetype = filetype }
+    end
+
+    local ok, err = pcall(render_latex.tmux_check)
+
+    util.open_scratch = previous_open_scratch
+
+    assert.is_true(ok, err)
+    local text = table.concat(opened.lines, "\n")
+    assert.are.equal("markdown", opened.filetype)
+    assert.matches("backend available", text)
+    assert.matches("image backend status", text)
+    assert.matches("kitty available", text)
+    assert.matches("kitty probing", text)
+    assert.matches("tmux passthrough", text)
   end)
 end)
 
@@ -1304,6 +1328,8 @@ describe("render_latex.integrations", function()
     package.loaded["render-markdown.state"] = previous_state
 
     assert.is_false(status.loaded)
+    assert.are.equal("not loaded", status.status)
+    assert.is_nil(status.action)
   end)
 
   it("detects render-markdown LaTeX conflict when loaded", function()
@@ -1326,7 +1352,8 @@ describe("render_latex.integrations", function()
     assert.is_true(status.loaded)
     assert.is_true(status.latex_enabled)
     assert.is_true(status.conflict)
-    assert.is_truthy(status.recommendation)
+    assert.are.equal("conflict detected", status.status)
+    assert.are.equal("set render-markdown latex.enabled=false", status.action)
   end)
 
   it("accepts render-markdown with LaTeX disabled", function()
@@ -1348,7 +1375,8 @@ describe("render_latex.integrations", function()
     assert.is_false(conflict)
     assert.is_false(status.latex_enabled)
     assert.is_false(status.conflict)
-    assert.is_truthy(status.recommendation)
+    assert.are.equal("compatible; render-markdown LaTeX rendering is disabled", status.status)
+    assert.is_nil(status.action)
   end)
 
   it("reports obsidian as loaded without requiring config changes", function()
@@ -1364,7 +1392,8 @@ describe("render_latex.integrations", function()
     assert.is_true(status.loaded)
     assert.is_true(status.client_available)
     assert.are.equal("test-vault", status.workspace)
-    assert.is_truthy(status.recommendation)
+    assert.are.equal("compatible; no special render-latex config is required", status.status)
+    assert.is_nil(status.action)
   end)
 end)
 
@@ -1376,6 +1405,9 @@ describe("render_latex.image_backend", function()
   local previous_term_program
   local previous_tmux
   local previous_send
+  local previous_img
+  local previous_executable
+  local previous_tmux_option
 
   before_each(function()
     previous_kitty = vim.env.KITTY_WINDOW_ID
@@ -1385,6 +1417,9 @@ describe("render_latex.image_backend", function()
     previous_term_program = vim.env.TERM_PROGRAM
     previous_tmux = vim.env.TMUX
     previous_send = vim.api.nvim_ui_send
+    previous_img = vim.ui.img
+    previous_executable = vim.fn.executable
+    previous_tmux_option = tmux.option
     image_backend.reset_for_tests()
     config.setup()
   end)
@@ -1397,12 +1432,14 @@ describe("render_latex.image_backend", function()
     vim.env.TERM_PROGRAM = previous_term_program
     vim.env.TMUX = previous_tmux
     vim.api.nvim_ui_send = previous_send
+    vim.ui.img = previous_img
+    vim.fn.executable = previous_executable
+    tmux.option = previous_tmux_option
     image_backend.reset_for_tests()
     config.setup()
   end)
 
   it("uses explicit nvim backend when available", function()
-    local previous_img = vim.ui.img
     vim.ui.img = {
       set = function() end,
       get = function() end,
@@ -1412,23 +1449,16 @@ describe("render_latex.image_backend", function()
 
     local backend, name, reason = image_backend.get()
 
-    config.setup()
-    vim.ui.img = previous_img
-
     assert.is_truthy(backend)
     assert.are.equal("nvim", name)
     assert.is_nil(reason)
   end)
 
   it("reports unavailable explicit nvim backend without vim.ui.img", function()
-    local previous_img = vim.ui.img
     vim.ui.img = {}
     config.setup({ image = { backend = "nvim" } })
 
     local backend, name, reason = image_backend.get()
-
-    config.setup()
-    vim.ui.img = previous_img
 
     assert.is_nil(backend)
     assert.are.equal("nvim", name)
@@ -1436,9 +1466,6 @@ describe("render_latex.image_backend", function()
   end)
 
   it("prefers kitty in tmux auto mode when passthrough is available", function()
-    local previous_option = tmux.option
-    local previous_executable = vim.fn.executable
-    local previous_img = vim.ui.img
     vim.ui.img = {
       set = function() end,
       get = function() end,
@@ -1456,19 +1483,12 @@ describe("render_latex.image_backend", function()
 
     local backend, name, reason = image_backend.get()
 
-    tmux.option = previous_option
-    vim.fn.executable = previous_executable
-    vim.ui.img = previous_img
-
     assert.is_truthy(backend)
     assert.are.equal("kitty", name)
     assert.is_nil(reason)
   end)
 
   it("falls back to nvim in tmux auto mode when kitty is unavailable", function()
-    local previous_option = tmux.option
-    local previous_executable = vim.fn.executable
-    local previous_img = vim.ui.img
     vim.ui.img = {
       set = function() end,
       get = function() end,
@@ -1490,19 +1510,12 @@ describe("render_latex.image_backend", function()
 
     local backend, name, reason = image_backend.get()
 
-    tmux.option = previous_option
-    vim.fn.executable = previous_executable
-    vim.ui.img = previous_img
-
     assert.is_truthy(backend)
     assert.are.equal("nvim", name)
     assert.is_nil(reason)
   end)
 
   it("requires tmux passthrough and a known outer terminal for kitty", function()
-    local previous_option = tmux.option
-    local previous_executable = vim.fn.executable
-    local previous_img = vim.ui.img
     vim.ui.img = {}
     config.setup({ image = { backend = "kitty" } })
     vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
@@ -1545,10 +1558,6 @@ describe("render_latex.image_backend", function()
     vim.env.KITTY_WINDOW_ID = "1"
     image_backend.reset_for_tests()
     backend, _, reason = image_backend.get()
-
-    tmux.option = previous_option
-    vim.fn.executable = previous_executable
-    vim.ui.img = previous_img
 
     assert.is_truthy(backend)
     assert.is_nil(reason)
