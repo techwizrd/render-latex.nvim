@@ -370,11 +370,18 @@ function M.doctor_lines()
     "",
     "## jupynvim",
     "",
+    "enabled: " .. tostring(jupynvim.enabled),
     "loaded: " .. tostring(jupynvim.loaded),
     "notebook buffer: " .. tostring(jupynvim.notebook),
+    "cells: " .. tostring(jupynvim.cell_count),
+    "buffer segments: " .. tostring(jupynvim.segment_count),
+    "ranges valid: " .. tostring(jupynvim.range_valid),
     "markdown ranges: " .. tostring(jupynvim.markdown_ranges),
     "experimental: " .. tostring(jupynvim.experimental),
   })
+  if jupynvim.range_warning ~= nil then
+    lines[#lines + 1] = "warning: " .. jupynvim.range_warning
+  end
 
   local obsidian = integrations.obsidian
   vim.list_extend(lines, {
@@ -389,6 +396,7 @@ function M.doctor_lines()
     "",
     "Compatibility checks run only in status, health, and doctor commands.",
     "The render loop does not inspect other plugins.",
+    "jupynvim refresh uses standard buffer/window events; upstream cell metadata events would improve immediate refresh.",
   })
 
   if Config.render.inline ~= false and vim.wo.conceallevel == 0 then

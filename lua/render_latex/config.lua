@@ -34,6 +34,9 @@
 ---@class render_latex.TmuxOptions
 ---@field install_cleanup_hooks boolean
 
+---@class render_latex.IntegrationOptions
+---@field jupynvim { enabled: boolean }
+
 ---@class render_latex.UserConfig
 ---@field enabled boolean
 ---@field debounce integer
@@ -47,6 +50,7 @@
 ---@field render render_latex.RenderOptions
 ---@field image render_latex.ImageOptions
 ---@field tmux render_latex.TmuxOptions
+---@field integrations render_latex.IntegrationOptions
 
 ---@class render_latex.Config: render_latex.UserConfig
 ---@field augroup integer
@@ -96,6 +100,11 @@ local defaults = {
   },
   tmux = {
     install_cleanup_hooks = false,
+  },
+  integrations = {
+    jupynvim = {
+      enabled = true,
+    },
   },
 }
 
@@ -158,6 +167,7 @@ function M.setup(opts)
     render = { config.render, "table" },
     image = { config.image, "table" },
     tmux = { config.tmux, "table" },
+    integrations = { config.integrations, "table" },
   })
 
   vim.validate({
@@ -173,6 +183,11 @@ function M.setup(opts)
     ["render.background"] = { config.render.background, "string" },
     ["render.equation_label_format"] = { config.render.equation_label_format, "string" },
     ["tmux.install_cleanup_hooks"] = { config.tmux.install_cleanup_hooks, "boolean" },
+    ["integrations.jupynvim"] = { config.integrations.jupynvim, "table" },
+    ["integrations.jupynvim.enabled"] = {
+      config.integrations.jupynvim.enabled,
+      "boolean",
+    },
   })
 
   if config.worker.bin ~= nil then

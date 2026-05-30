@@ -144,6 +144,18 @@ require("render-markdown").setup({
 
 `render-latex.nvim` has an experimental source integration for [`jupynvim`](https://github.com/sheng-tse/jupynvim). When a jupynvim notebook buffer is detected, display math inside Markdown cells is rendered as images. Code cells are ignored, and inline math in notebook Markdown cells is left to jupynvim for now.
 
+Disable the integration without disabling regular Markdown rendering:
+
+```lua
+require("render_latex").setup({
+  integrations = {
+    jupynvim = { enabled = false },
+  },
+})
+```
+
+If jupynvim cell metadata and buffer separators disagree, notebook rendering is skipped for safety and reported in `:RenderLatex doctor` and `:checkhealth render_latex`. Cell type changes are picked up on the next render queue; stable upstream jupynvim cell range APIs and metadata-change events would allow more direct integration.
+
 Other plugins can expose Markdown-like regions through the experimental source API:
 
 ```lua

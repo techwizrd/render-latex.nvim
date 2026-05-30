@@ -135,7 +135,11 @@ function M.check()
   end
 
   local jupynvim = Integrations.jupynvim(vim.api.nvim_get_current_buf())
-  if jupynvim.notebook then
+  if not jupynvim.enabled then
+    vim.health.info("jupynvim integration is disabled by config")
+  elseif jupynvim.notebook and not jupynvim.range_valid then
+    vim.health.warn(jupynvim.range_warning or "jupynvim cell ranges are invalid")
+  elseif jupynvim.notebook then
     vim.health.info(
       "jupynvim notebook detected; experimental display-math rendering is active for Markdown cells"
     )

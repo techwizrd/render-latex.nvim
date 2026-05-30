@@ -24,7 +24,8 @@ local jupynvim_source = {
   suppress_default_equation_labels = true,
   clear_source_line_background = true,
   attach = function(bufnr)
-    return require("render_latex.integrations.jupynvim").notebook(bufnr) ~= nil
+    return Config.integrations.jupynvim.enabled
+      and require("render_latex.integrations.jupynvim").notebook(bufnr) ~= nil
   end,
   display_ranges = function(bufnr)
     return require("render_latex.integrations.jupynvim").markdown_ranges(bufnr)

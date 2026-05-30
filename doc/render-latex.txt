@@ -281,6 +281,15 @@ Tmux options:
                          This is opt-in because it mutates tmux state. Default:
                          `false`.
 
+Integration options:
+
+                                *render-latex-integrations.jupynvim.enabled*
+`integrations.jupynvim.enabled`
+                         Enable the experimental jupynvim source integration.
+                         When enabled, notebook Markdown cells render display
+                         math as images and code cells are ignored. Default:
+                         `true`.
+
 ===============================================================================
 COMMANDS                                             *render-latex-commands*
 
@@ -371,6 +380,21 @@ render-latex.nvim has an experimental source integration for jupynvim. When a
 jupynvim notebook buffer is detected, display math inside Markdown cells is
 rendered as images. Code cells are ignored, and inline math inside notebook
 Markdown cells is left to jupynvim for now.
+
+Disable this integration without disabling regular Markdown rendering:
+>
+  require("render_latex").setup({
+    integrations = {
+      jupynvim = { enabled = false },
+    },
+  })
+<
+
+If jupynvim cell metadata and buffer separators disagree, render-latex.nvim
+skips notebook rendering for safety and reports the mismatch in `:RenderLatex
+doctor` and `:checkhealth render_latex`. Cell type changes are picked up through
+the source revision path on the next render queue; stable upstream jupynvim cell
+range APIs and metadata-change events would allow more direct integration.
 
 Other plugins can expose Markdown-like regions through the experimental source
 API:

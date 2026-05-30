@@ -1,5 +1,9 @@
 local M = {}
 
+local function enabled()
+  return require("render_latex.config").integrations.jupynvim.enabled
+end
+
 local function notebook_module()
   local ok, notebook = pcall(require, "jupynvim.notebook")
   if ok and type(notebook) == "table" then
@@ -21,6 +25,22 @@ function M.notebook(bufnr)
   return nil
 end
 
+local function cell_segments(bufnr, sep)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local segments = {}
+  local start_row = 0
+
+  for index, line in ipairs(lines) do
+    if line == sep then
+      segments[#segments + 1] = { start_row = start_row, end_row = index - 2 }
+      start_row = index
+    end
+  end
+  segments[#segments + 1] = { start_row = start_row, end_row = #lines - 1 }
+
+  return segments
+end
+
 function M.markdown_ranges(bufnr)
   local notebook = notebook_module()
   local nb = notebook ~= nil and M.notebook(bufnr) or nil
@@ -33,19 +53,7 @@ function M.markdown_ranges(bufnr)
     return {}
   end
 
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local segments = {}
-  local start_row = 0
-  local cell_index = 1
-
-  for index, line in ipairs(lines) do
-    if line == sep then
-      segments[#segments + 1] = { start_row = start_row, end_row = index - 2 }
-      start_row = index
-      cell_index = cell_index + 1
-    end
-  end
-  segments[#segments + 1] = { start_row = start_row, end_row = #lines - 1 }
+  local segments = cell_segments(bufnr, sep)
 
   if #segments ~= #nb.cells then
     return {}
@@ -60,6 +68,38 @@ function M.markdown_ranges(bufnr)
   end
 
   return ranges
+end
+
+local function range_diagnostics(bufnr, notebook, nb)
+  if notebook == nil or nb == nil or type(nb.cells) ~= "table" then
+    return {
+      cell_count = 0,
+      segment_count = 0,
+      range_valid = false,
+      range_warning = nil,
+    }
+  end
+
+  local sep = notebook.CELL_SEP
+  if type(sep) ~= "string" or sep == "" then
+    return {
+      cell_count = #nb.cells,
+      segment_count = 0,
+      range_valid = false,
+      range_warning = "jupynvim CELL_SEP is unavailable",
+    }
+  end
+
+  local segments = cell_segments(bufnr, sep)
+  local valid = #segments == #nb.cells
+  return {
+    cell_count = #nb.cells,
+    segment_count = #segments,
+    range_valid = valid,
+    range_warning = not valid
+        and "jupynvim cell metadata and buffer separators disagree; rendering is disabled for safety"
+      or nil,
+  }
 end
 
 function M.revision(bufnr)
@@ -141,11 +181,32 @@ end
 
 function M.status(bufnr)
   local loaded = package.loaded["jupynvim"] ~= nil or package.loaded["jupynvim.notebook"] ~= nil
+  if not enabled() then
+    return {
+      enabled = false,
+      loaded = loaded,
+      notebook = false,
+      cell_count = 0,
+      segment_count = 0,
+      range_valid = false,
+      range_warning = nil,
+      markdown_ranges = 0,
+      experimental = true,
+    }
+  end
+
+  local notebook = notebook_module()
   local nb = M.notebook(bufnr)
-  local ranges = nb ~= nil and M.markdown_ranges(bufnr) or {}
+  local diagnostics = range_diagnostics(bufnr, notebook, nb)
+  local ranges = nb ~= nil and diagnostics.range_valid and M.markdown_ranges(bufnr) or {}
   return {
+    enabled = enabled(),
     loaded = loaded,
     notebook = nb ~= nil,
+    cell_count = diagnostics.cell_count,
+    segment_count = diagnostics.segment_count,
+    range_valid = diagnostics.range_valid,
+    range_warning = diagnostics.range_warning,
     markdown_ranges = #ranges,
     experimental = true,
   }

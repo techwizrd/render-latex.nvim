@@ -601,6 +601,37 @@ describe("render_latex.integrations.jupynvim", function()
     assert.are.equal(0, #ranges)
   end)
 
+  it("reports jupynvim cell range diagnostics", function()
+    local previous = package.loaded["jupynvim.notebook"]
+    local sep = "# %%[jupynvim:cell-sep]"
+    package.loaded["jupynvim.notebook"] = {
+      CELL_SEP = sep,
+      get = function()
+        return {
+          cells = {
+            { cell_type = "markdown" },
+          },
+        }
+      end,
+    }
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "# markdown",
+      sep,
+      "print('extra cell')",
+    })
+
+    local status = require("render_latex.integrations.jupynvim").status(buf)
+    package.loaded["jupynvim.notebook"] = previous
+
+    assert.is_true(status.enabled)
+    assert.are.equal(1, status.cell_count)
+    assert.are.equal(2, status.segment_count)
+    assert.is_false(status.range_valid)
+    assert.is_truthy(status.range_warning)
+  end)
+
   it("computes jupynvim image bounds from the text area", function()
     local winid = vim.api.nvim_get_current_win()
     local buf = vim.api.nvim_get_current_buf()
@@ -690,6 +721,34 @@ describe("render_latex.integrations.jupynvim", function()
     assert.are.equal(1, #equations)
     assert.are.equal("visible", equations[1].text)
     assert.are.equal(0, #inline)
+  end)
+
+  it("can disable the built-in jupynvim source", function()
+    local previous = package.loaded["jupynvim.notebook"]
+    local sep = "# %%[jupynvim:cell-sep]"
+    package.loaded["jupynvim.notebook"] = {
+      CELL_SEP = sep,
+      get = function()
+        return {
+          cells = {
+            { cell_type = "markdown" },
+          },
+        }
+      end,
+    }
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].filetype = "python"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$ visible $$" })
+
+    config.setup({ integrations = { jupynvim = { enabled = false } } })
+    local source_status = sources.status(buf)
+    local jupynvim_status = require("render_latex.integrations.jupynvim").status(buf)
+    package.loaded["jupynvim.notebook"] = previous
+    config.setup()
+
+    assert.is_nil(source_status.active)
+    assert.is_false(jupynvim_status.enabled)
   end)
 
   it("guards invalid custom inline range returns", function()
@@ -1027,6 +1086,14 @@ describe("render_latex.config", function()
     assert.has.errors(function()
       config.setup({ render = { hide_on_cmdline = "yes" } })
     end)
+    config.setup()
+  end)
+
+  it("accepts integration options", function()
+    config.setup({ integrations = { jupynvim = { enabled = false } } })
+
+    assert.is_false(config.integrations.jupynvim.enabled)
+
     config.setup()
   end)
 

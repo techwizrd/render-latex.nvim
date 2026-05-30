@@ -23,6 +23,7 @@ render-latex-image.backend	render-latex.txt	/*render-latex-image.backend*
 render-latex-image.cell_height_px	render-latex.txt	/*render-latex-image.cell_height_px*
 render-latex-image.cell_width_px	render-latex.txt	/*render-latex-image.cell_width_px*
 render-latex-image.zindex	render-latex.txt	/*render-latex-image.zindex*
+render-latex-integrations.jupynvim.enabled	render-latex.txt	/*render-latex-integrations.jupynvim.enabled*
 render-latex-install.auto	render-latex.txt	/*render-latex-install.auto*
 render-latex-install.repository	render-latex.txt	/*render-latex-install.repository*
 render-latex-install.version	render-latex.txt	/*render-latex-install.version*
