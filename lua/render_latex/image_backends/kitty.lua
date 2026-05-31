@@ -96,7 +96,7 @@ local function transmit(img_id, data)
       control.i = img_id
       control.q = "2"
     end
-    send(seq(control, chunk))
+    send_batched(seq(control, chunk))
     pos = end_pos + 1
   end
 end

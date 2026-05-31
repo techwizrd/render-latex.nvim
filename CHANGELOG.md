@@ -46,6 +46,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 - Fixed right-aligned equation labels on Neovim 0.10 by falling back to end-of-line virtual text when `eol_right_align` extmarks are unavailable.
 - Fixed Kitty image rendering on Neovim 0.10 by falling back to raw terminal output through stderr when `nvim_ui_send()` is unavailable.
 - Fixed focused rendered equations in normal Markdown and custom sources so entering an already-rendered equation reveals the raw LaTeX source.
+- Fixed stale equation images after dirty focused equations are cleared or detached, and reduced inline fallback scanning to the visible range prefix.
 
 ## 0.1.0-rc2 - 2026-05-16
 

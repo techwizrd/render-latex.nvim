@@ -3225,6 +3225,11 @@ describe("render_latex.renderer", function()
       assert.are.equal(1, request_count)
       vim.api.nvim_win_set_cursor(0, { 2, 0 })
       renderer.render(buf)
+
+      local marks = vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true })
+      for _, mark in ipairs(marks) do
+        assert.is_nil(mark[4].conceal)
+      end
     end)
 
     vim.b[buf].render_latex_focus_source_test = false
@@ -3242,6 +3247,104 @@ describe("render_latex.renderer", function()
     end
     assert.are.equal(1, request_count)
     assert.is_true(del_count > 0)
+  end)
+
+  it("does not reuse stale metadata after clearing dirty focused equations", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
+    local previous_readblob = vim.fn.readblob
+    local previous_screenpos = vim.fn.screenpos
+    local request_count = 0
+    local requested = {}
+    local set_count = 0
+
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    image_backend.get = function()
+      return {
+        del = function() end,
+        set = function()
+          set_count = set_count + 1
+          return set_count
+        end,
+      },
+        "test"
+    end
+    worker.request_batch = function(items, callback)
+      request_count = request_count + 1
+      requested[#requested + 1] = items[1].formula
+      callback({
+        {
+          error = nil,
+          result = {
+            width_px = 10,
+            height_px = 10,
+            png_path = "/tmp/render-latex-stale-focus-test.png",
+            cache_key = "stale-focus-test-" .. request_count,
+          },
+        },
+      }, nil)
+    end
+    viewport.viewport_range = function()
+      return 0, 4
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 20
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+    vim.fn.screenpos = function()
+      return { row = 1, col = 1, endcol = 1, curscol = 1 }
+    end
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "markdown"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+
+      renderer.set_suppressed("cmdline", false)
+      renderer.set_suppressed("floating", false)
+      renderer.attach(buf)
+      renderer.render(buf)
+      vim.wait(100, function()
+        return set_count == 1
+      end)
+
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      renderer.render(buf)
+      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "y^2" })
+      renderer.on_text_changed(buf, false)
+      renderer.clear_all()
+
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+      renderer.render(buf)
+      vim.wait(100, function()
+        return set_count == 2
+      end)
+    end)
+
+    worker.request_batch = previous_request_batch
+    viewport.viewport_range = previous_viewport_range
+    viewport.visible_text_bounds = previous_visible_text_bounds
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    vim.fn.readblob = previous_readblob
+    vim.fn.screenpos = previous_screenpos
+    config.setup()
+
+    if not ok then
+      error(err)
+    end
+    assert.are.equal(2, request_count)
+    assert.are.same({ "x^2", "y^2" }, requested)
   end)
 
   it("can inspect and toggle the current equation", function()
@@ -3480,7 +3583,6 @@ describe("render_latex.renderer", function()
     local previous_img = vim.ui.img
     local previous_backend_status = image_backend.status
     local previous_request_batch = worker.request_batch
-    local previous_visible_equations = viewport.visible_equations
     local previous_warn = util.warn
     local request_count = 0
     local warn_count = 0
@@ -3497,9 +3599,6 @@ describe("render_latex.renderer", function()
     worker.request_batch = function(_, callback)
       request_count = request_count + 1
       callback({ { error = { message = "parse error" }, result = nil } }, nil)
-    end
-    viewport.visible_equations = function(_, indexed_equations)
-      return indexed_equations
     end
     util.warn = function()
       warn_count = warn_count + 1
@@ -3518,7 +3617,6 @@ describe("render_latex.renderer", function()
     renderer.render(buf)
 
     worker.request_batch = previous_request_batch
-    viewport.visible_equations = previous_visible_equations
     image_backend.status = previous_backend_status
     util.warn = previous_warn
     vim.ui.img = previous_img

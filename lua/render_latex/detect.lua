@@ -263,8 +263,12 @@ local function pipe_table_rows(lines, ignored)
   return rows
 end
 
-local function scan_context(bufnr)
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+local function scan_context(bufnr, end_row)
+  local end_index = -1
+  if end_row ~= nil then
+    end_index = math.min(vim.api.nvim_buf_line_count(bufnr), end_row + 1)
+  end
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, end_index, false)
   local ignored = ignored_rows(lines)
   return {
     lines = lines,
@@ -634,7 +638,7 @@ function M.inline_range(bufnr, start_row, end_row)
     return {}
   end
 
-  return inline_items_in_range(scan_context(bufnr), start_row, end_row)
+  return inline_items_in_range(scan_context(bufnr, end_row), start_row, end_row)
 end
 
 ---@param bufnr integer
@@ -645,7 +649,11 @@ function M.inline_ranges(bufnr, ranges)
     return {}
   end
 
-  local context = scan_context(bufnr)
+  local max_end_row = 0
+  for _, range in ipairs(ranges) do
+    max_end_row = math.max(max_end_row, range.end_row)
+  end
+  local context = scan_context(bufnr, max_end_row)
   local items = {}
   local seen = {}
   for _, range in ipairs(ranges) do

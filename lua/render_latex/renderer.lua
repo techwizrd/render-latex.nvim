@@ -16,13 +16,14 @@ local suppression = {
   floating = false,
 }
 local last_backend_warning
+local handle_focus_exit
 
 local function should_skip_render_loop()
   return suppression.cmdline
 end
 
-local function should_hide_focused_equation(bufnr, state, key)
-  if Sources.render_context(bufnr).hide_focused_equation then
+local function should_hide_focused_equation(context, state, key)
+  if context.hide_focused_equation then
     return true
   end
   if state.focus_revealed[key] then
@@ -256,7 +257,21 @@ local function clear_images(bufnr)
   state.placements = {}
 end
 
-local function clear_window_images(state, winid)
+local function only_focused_window(state, winid, key)
+  for other_winid, other_key in pairs(state.focused_keys) do
+    if other_winid ~= winid and other_key == key then
+      return false
+    end
+  end
+  return true
+end
+
+local function clear_window_images(bufnr, state, winid)
+  local focused_key = state.focused_keys[winid]
+  if focused_key ~= nil and only_focused_window(state, winid, focused_key) then
+    handle_focus_exit(bufnr, state, focused_key, equations(bufnr), false)
+  end
+
   local image_ids = state.images[winid]
   if image_ids ~= nil then
     local backend = ImageBackend.get()
@@ -342,6 +357,10 @@ local function cancel_delayed_render(state, key)
   state.delayed_render[key] = nil
 end
 
+local function equation_content_hash(equation)
+  return Util.sha256(equation.text)
+end
+
 local function schedule_delayed_render(bufnr, key)
   local state = get_buffer_state(bufnr)
   cancel_delayed_render(state, key)
@@ -369,6 +388,32 @@ local function schedule_delayed_render(bufnr, key)
   end)
 end
 
+handle_focus_exit = function(bufnr, state, key, indexed_equations, schedule)
+  clear_equation_display(bufnr, key)
+  state.focus_revealed[key] = nil
+  if not state.dirty[key] then
+    return
+  end
+
+  local previous_equation = nil
+  for _, equation in ipairs(indexed_equations or {}) do
+    if equation.key == key then
+      previous_equation = equation
+      break
+    end
+  end
+
+  local meta = state.metadata[key]
+  local next_hash = previous_equation and equation_content_hash(previous_equation) or nil
+  if meta == nil or next_hash == nil or meta.content_hash ~= next_hash then
+    state.metadata[key] = nil
+    if schedule then
+      schedule_delayed_render(bufnr, key)
+    end
+  end
+  state.dirty[key] = nil
+end
+
 equations = function(bufnr)
   local state = get_buffer_state(bufnr)
   if not Sources.incremental(bufnr) then
@@ -386,10 +431,6 @@ equations = function(bufnr)
     state.scanned = true
   end
   return state.equations
-end
-
-local function equation_content_hash(equation)
-  return Util.sha256(equation.text)
 end
 
 local function visible_inline_ranges(bufnr)
@@ -412,6 +453,13 @@ local function failure_matches(failure, content_hash, render_fingerprint)
   return failure ~= nil
     and failure.content_hash == content_hash
     and failure.render_fingerprint == render_fingerprint
+end
+
+local function metadata_matches(meta, equation, option_cache)
+  return meta ~= nil
+    and meta.content_hash == equation_content_hash(equation)
+    and meta.render_fingerprint
+      == render_fingerprint(cached_render_options(option_cache, equation))
 end
 
 local function record_render_failure(state, equation, content_hash, render_fingerprint, message)
@@ -476,11 +524,23 @@ local function prune_stale_state(state, indexed_equations)
   end
 end
 
+local function release_focused_equations(bufnr, state)
+  local indexed_equations = equations(bufnr)
+  local seen = {}
+  for _, key in pairs(state.focused_keys) do
+    if not seen[key] then
+      seen[key] = true
+      handle_focus_exit(bufnr, state, key, indexed_equations, false)
+    end
+  end
+end
+
 function M.clear(bufnr)
   clear_images(bufnr)
   clear_marks(bufnr)
   local state = buffers[bufnr]
   if state ~= nil then
+    release_focused_equations(bufnr, state)
     state.focused_keys = {}
     state.focus_revealed = {}
     state.dirty = {}
@@ -511,6 +571,7 @@ function M.clear_all()
     end
     state.images = {}
     state.placements = {}
+    release_focused_equations(bufnr, state)
     state.focused_keys = {}
     state.focus_revealed = {}
     state.dirty = {}
@@ -589,25 +650,7 @@ local function sync_focus(bufnr, indexed_equations, snapshot)
 
   for key, _ in pairs(previous_active) do
     if next_active[key] == nil then
-      clear_equation_display(bufnr, key)
-      state.focus_revealed[key] = nil
-      if state.dirty[key] then
-        local previous_equation = nil
-        for _, equation in ipairs(indexed_equations) do
-          if equation.key == key then
-            previous_equation = equation
-            break
-          end
-        end
-
-        local meta = state.metadata[key]
-        local next_hash = previous_equation and equation_content_hash(previous_equation) or nil
-        if meta == nil or next_hash == nil or meta.content_hash ~= next_hash then
-          state.metadata[key] = nil
-          schedule_delayed_render(bufnr, key)
-        end
-        state.dirty[key] = nil
-      end
+      handle_focus_exit(bufnr, state, key, indexed_equations, true)
     end
   end
 
@@ -630,9 +673,8 @@ local function sync_focus(bufnr, indexed_equations, snapshot)
   return focused
 end
 
-local function ensure_mark(bufnr, equation, meta)
+local function ensure_mark(bufnr, equation, meta, context)
   local state = get_buffer_state(bufnr)
-  local context = Sources.render_context(bufnr)
   local source_lines = equation.end_row - equation.start_row + 1
   local reserved = math.max(0, meta.height_cells - source_lines)
   local layout = table.concat({
@@ -741,20 +783,19 @@ local function visible_equations_from_ranges(indexed_equations, ranges)
   return visible
 end
 
-local function should_suppress_label(bufnr)
-  local context = Sources.render_context(bufnr)
+local function should_suppress_label(context)
   return context.suppress_default_equation_labels
     and not Config.is_explicit("render.equation_labels")
 end
 
-local function clear_suppressed_label(bufnr, state, equation)
-  if should_suppress_label(bufnr) then
+local function clear_suppressed_label(context, bufnr, state, equation)
+  if should_suppress_label(context) then
     Annotations.clear_label(bufnr, Config.ns, state, equation.key)
   end
 end
 
-local function update_label(bufnr, state, equation, visible_index)
-  if should_suppress_label(bufnr) then
+local function update_label(context, bufnr, state, equation, visible_index)
+  if should_suppress_label(context) then
     Annotations.clear_label(bufnr, Config.ns, state, equation.key)
     return
   end
@@ -867,7 +908,7 @@ local function cleanup_inactive(state, bufnr, active, active_images, backend)
 
   for winid, image_ids in pairs(state.images) do
     if not Util.win_is_valid(winid) then
-      clear_window_images(state, winid)
+      clear_window_images(bufnr, state, winid)
     else
       local keep = active_images[winid] or {}
       for key, image_id in pairs(image_ids) do
@@ -894,31 +935,24 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
   local floating_suppressed = suppression.floating
   local needs_render = false
   local focused = active_focus_counts(state.focused_keys)
+  local context = Sources.render_context(bufnr)
 
   with_backend_batch(backend, function()
     for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
       visible_index = visible_index + 1
       active[equation.key] = true
-      clear_suppressed_label(bufnr, state, equation)
+      clear_suppressed_label(context, bufnr, state, equation)
       local meta = state.metadata[equation.key]
-      if focused[equation.key] and should_hide_focused_equation(bufnr, state, equation.key) then
+      if focused[equation.key] and should_hide_focused_equation(context, state, equation.key) then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] or state.delayed_render[equation.key] then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif floating_suppressed then
         clear_equation_display(bufnr, equation.key, backend, true)
-        if
-          meta == nil
-          or meta.render_fingerprint
-            ~= render_fingerprint(cached_render_options(option_cache, equation))
-        then
+        if not metadata_matches(meta, equation, option_cache) then
           needs_render = true
         end
-      elseif
-        meta == nil
-        or meta.render_fingerprint
-          ~= render_fingerprint(cached_render_options(option_cache, equation))
-      then
+      elseif not metadata_matches(meta, equation, option_cache) then
         needs_render = true
       elseif backend == nil then
         clear_equation_display(bufnr, equation.key, backend, true)
@@ -928,8 +962,8 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
         end
         needs_render = true
       else
-        ensure_mark(bufnr, equation, meta)
-        update_label(bufnr, state, equation, visible_index)
+        ensure_mark(bufnr, equation, meta, context)
+        update_label(context, bufnr, state, equation, visible_index)
         for _, winid in ipairs(snapshot.winids) do
           if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
             active_images[winid] = active_images[winid] or {}
@@ -1072,15 +1106,16 @@ function M.render(bufnr)
   local batch = {}
   local visible_index = 0
   local option_cache = {}
+  local context = Sources.render_context(bufnr)
 
   with_backend_batch(backend, function()
     for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
       visible_index = visible_index + 1
       active[equation.key] = true
-      clear_suppressed_label(bufnr, state, equation)
+      clear_suppressed_label(context, bufnr, state, equation)
       local meta = state.metadata[equation.key]
       if
-        focused_keys[equation.key] and should_hide_focused_equation(bufnr, state, equation.key)
+        focused_keys[equation.key] and should_hide_focused_equation(context, state, equation.key)
       then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] then
@@ -1089,11 +1124,7 @@ function M.render(bufnr)
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif floating_suppressed then
         clear_equation_display(bufnr, equation.key, backend, true)
-        if
-          meta == nil
-          or meta.render_fingerprint
-            ~= render_fingerprint(cached_render_options(option_cache, equation))
-        then
+        if not metadata_matches(meta, equation, option_cache) then
           batch[#batch + 1] = equation
         end
       elseif not backend_status.available then
@@ -1102,15 +1133,11 @@ function M.render(bufnr)
           last_backend_warning = backend_status.reason
           Util.warn(backend_status.reason or "No image backend is available")
         end
-      elseif
-        meta == nil
-        or meta.render_fingerprint
-          ~= render_fingerprint(cached_render_options(option_cache, equation))
-      then
+      elseif not metadata_matches(meta, equation, option_cache) then
         batch[#batch + 1] = equation
       else
-        ensure_mark(bufnr, equation, meta)
-        update_label(bufnr, state, equation, visible_index)
+        ensure_mark(bufnr, equation, meta, context)
+        update_label(context, bufnr, state, equation, visible_index)
         for _, winid in ipairs(snapshot.winids) do
           if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
             active_images[winid] = active_images[winid] or {}
@@ -1255,13 +1282,13 @@ function M.detach_window(bufnr, winid)
   if state == nil then
     return
   end
-  clear_window_images(state, winid)
+  clear_window_images(bufnr, state, winid)
 end
 
 ---@param winid integer
 function M.detach_winid(winid)
-  for _, state in pairs(buffers) do
-    clear_window_images(state, winid)
+  for bufnr, state in pairs(buffers) do
+    clear_window_images(bufnr, state, winid)
   end
 end
 
