@@ -1953,6 +1953,7 @@ describe("render_latex.image_backend", function()
   local previous_term_program
   local previous_tmux
   local previous_send
+  local previous_chan_send
   local previous_img
   local previous_executable
   local previous_tmux_option
@@ -1965,6 +1966,7 @@ describe("render_latex.image_backend", function()
     previous_term_program = vim.env.TERM_PROGRAM
     previous_tmux = vim.env.TMUX
     previous_send = vim.api.nvim_ui_send
+    previous_chan_send = vim.api.nvim_chan_send
     previous_img = vim.ui.img
     previous_executable = vim.fn.executable
     previous_tmux_option = tmux.option
@@ -1980,6 +1982,7 @@ describe("render_latex.image_backend", function()
     vim.env.TERM_PROGRAM = previous_term_program
     vim.env.TMUX = previous_tmux
     vim.api.nvim_ui_send = previous_send
+    vim.api.nvim_chan_send = previous_chan_send
     vim.ui.img = previous_img
     vim.fn.executable = previous_executable
     tmux.option = previous_tmux_option
@@ -2022,6 +2025,7 @@ describe("render_latex.image_backend", function()
     config.setup({ image = { backend = "auto" } })
     vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
     vim.env.KITTY_WINDOW_ID = "1"
+    vim.api.nvim_ui_send = function() end
     vim.fn.executable = function(name)
       return name == "tmux" and 1 or previous_executable(name)
     end
@@ -2067,6 +2071,7 @@ describe("render_latex.image_backend", function()
     vim.ui.img = {}
     config.setup({ image = { backend = "kitty" } })
     vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.api.nvim_ui_send = function() end
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
     vim.env.GHOSTTY_RESOURCES_DIR = nil
@@ -2099,6 +2104,7 @@ describe("render_latex.image_backend", function()
 
     config.setup({ image = { backend = "kitty" } })
     image_backend.reset_for_tests()
+    vim.api.nvim_ui_send = function() end
     backend, _, reason = image_backend.get()
     assert.is_truthy(backend)
     assert.is_nil(reason)
@@ -2113,6 +2119,7 @@ describe("render_latex.image_backend", function()
 
   it("reports unavailable explicit kitty backend without terminal support", function()
     config.setup({ image = { backend = "kitty" } })
+    vim.api.nvim_ui_send = function() end
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
     vim.env.GHOSTTY_RESOURCES_DIR = nil
@@ -2126,7 +2133,64 @@ describe("render_latex.image_backend", function()
     assert.is_truthy(reason)
   end)
 
-  it("does not probe kitty support when nvim_ui_send is unavailable", function()
+  it("falls back to nvim in tmux auto mode when kitty cannot be emitted", function()
+    vim.ui.img = {
+      set = function() end,
+      get = function() end,
+      del = function() end,
+    }
+    config.setup({ image = { backend = "auto" } })
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.KITTY_WINDOW_ID = "1"
+    vim.api.nvim_ui_send = nil
+    vim.api.nvim_chan_send = nil
+    vim.fn.executable = function(name)
+      return name == "tmux" and 1 or previous_executable(name)
+    end
+    tmux.option = function()
+      return "on"
+    end
+
+    local backend, name, reason = image_backend.get()
+    local status = image_backend.status()
+
+    assert.is_truthy(backend)
+    assert.are.equal("nvim", name)
+    assert.is_nil(reason)
+    assert.is_false(status.kitty_available)
+  end)
+
+  it("uses stderr raw output for kitty on older Neovim", function()
+    local sent = {}
+    vim.ui.img = nil
+    config.setup({ image = { backend = "auto" } })
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.KITTY_WINDOW_ID = "1"
+    vim.api.nvim_ui_send = nil
+    vim.api.nvim_chan_send = function(channel, data)
+      sent[#sent + 1] = { channel = channel, data = data }
+    end
+    vim.fn.executable = function(name)
+      return name == "tmux" and 1 or previous_executable(name)
+    end
+    tmux.option = function()
+      return "on"
+    end
+
+    local backend, name, reason = image_backend.get()
+
+    assert.is_truthy(backend)
+    assert.are.equal("kitty", name)
+    assert.is_nil(reason)
+
+    local id = backend.set("png", { row = 1, col = 1, width = 2, height = 2 })
+    backend.del(id)
+
+    assert.is_true(#sent > 0)
+    assert.are.equal(tonumber(vim.v.stderr), sent[1].channel)
+  end)
+
+  it("does not probe kitty support when raw terminal output is unavailable", function()
     config.setup({ image = { backend = "kitty" } })
     vim.env.KITTY_WINDOW_ID = nil
     vim.env.WEZTERM_EXECUTABLE = nil
@@ -2135,12 +2199,13 @@ describe("render_latex.image_backend", function()
     vim.env.TERM_PROGRAM = nil
     vim.env.TMUX = nil
     vim.api.nvim_ui_send = nil
+    vim.api.nvim_chan_send = nil
 
     local backend, _, reason = image_backend.get()
     local status = image_backend.status()
 
     assert.is_nil(backend)
-    assert.are.equal("kitty image protocol is not available in this terminal", reason)
+    assert.are.equal("raw terminal output is unavailable for Kitty graphics", reason)
     assert.is_false(status.kitty_probing)
     assert.is_false(status.kitty_available)
   end)
@@ -2153,7 +2218,7 @@ describe("render_latex.image_backend", function()
     vim.env.TERM = "xterm-ghostty"
     vim.env.TERM_PROGRAM = nil
     vim.env.TMUX = nil
-    vim.api.nvim_ui_send = nil
+    vim.api.nvim_ui_send = function() end
 
     local backend, name, reason = image_backend.get()
     local status = image_backend.status()
@@ -2173,7 +2238,7 @@ describe("render_latex.image_backend", function()
     vim.env.TERM = "xterm-256color"
     vim.env.TERM_PROGRAM = "ghostty"
     vim.env.TMUX = nil
-    vim.api.nvim_ui_send = nil
+    vim.api.nvim_ui_send = function() end
 
     local backend = image_backend.get()
 
@@ -2298,6 +2363,34 @@ describe("render_latex.image_backends.kitty", function()
     assert.is_truthy(sent[3]:find("a=p", 1, true))
     assert.is_truthy(sent[3]:find("a=d", 1, true))
   end)
+
+  it("falls back to stderr channel sends", function()
+    local previous_send = vim.api.nvim_ui_send
+    local previous_chan_send = vim.api.nvim_chan_send
+    local previous_tmux = vim.env.TMUX
+    local sent = {}
+
+    package.loaded["render_latex.image_backends.kitty"] = nil
+    local kitty = require("render_latex.image_backends.kitty")
+
+    vim.api.nvim_ui_send = nil
+    vim.api.nvim_chan_send = function(channel, data)
+      sent[#sent + 1] = { channel = channel, data = data }
+    end
+    vim.env.TMUX = nil
+
+    local id = kitty.set("png", { row = 1, col = 1, width = 2, height = 2 })
+    kitty.del(id)
+
+    vim.api.nvim_ui_send = previous_send
+    vim.api.nvim_chan_send = previous_chan_send
+    vim.env.TMUX = previous_tmux
+
+    assert.is_true(#sent >= 2)
+    assert.are.equal(tonumber(vim.v.stderr), sent[1].channel)
+    assert.is_truthy(sent[1].data:find("a=t", 1, true))
+    assert.is_truthy(sent[2].data:find("a=p", 1, true))
+  end)
 end)
 
 describe("render_latex.install", function()
@@ -2399,8 +2492,10 @@ describe("render_latex.renderer", function()
     local previous_viewport_range = viewport.viewport_range
     local previous_visible_text_bounds = viewport.visible_text_bounds
     local previous_readblob = vim.fn.readblob
+    local previous_screenpos = vim.fn.screenpos
     local captured_opts
     local request_count = 0
+    local set_count = 0
     local sep = "# %%[jupynvim:cell-sep]"
 
     package.loaded["jupynvim.notebook"] = {
@@ -2415,6 +2510,7 @@ describe("render_latex.renderer", function()
     image_backend.get = function()
       return {
         set = function(_, set_opts)
+          set_count = set_count + 1
           captured_opts = set_opts
           return 1
         end,
@@ -2445,6 +2541,9 @@ describe("render_latex.renderer", function()
     vim.fn.readblob = function()
       return "png"
     end
+    vim.fn.screenpos = function()
+      return { row = 1, col = 1, endcol = 1, curscol = 1 }
+    end
 
     local ok, err = pcall(function()
       config.setup(opts.config)
@@ -2458,9 +2557,10 @@ describe("render_latex.renderer", function()
       renderer.set_suppressed("floating", false)
       renderer.attach(buf)
       renderer.render(buf)
-      vim.wait(100, function()
-        return captured_opts ~= nil
-      end)
+      local placed = vim.wait(1000, function()
+        return set_count > 0 and captured_opts ~= nil
+      end, 10)
+      assert.is_true(placed)
 
       assertions(buf, captured_opts)
     end)
@@ -2472,6 +2572,7 @@ describe("render_latex.renderer", function()
     viewport.viewport_range = previous_viewport_range
     viewport.visible_text_bounds = previous_visible_text_bounds
     vim.fn.readblob = previous_readblob
+    vim.fn.screenpos = previous_screenpos
     config.setup()
 
     if not ok then

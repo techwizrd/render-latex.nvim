@@ -27,8 +27,29 @@ local function use_builtin()
   return vim.ui.img ~= nil and type(vim.ui.img.set) == "function"
 end
 
-local function can_probe_kitty()
-  return type(vim.api.nvim_ui_send) == "function"
+local function kitty_stderr_channel()
+  local channel = tonumber(vim.v.stderr)
+  if type(vim.api.nvim_chan_send) == "function" and channel ~= nil and channel > 0 then
+    return channel
+  end
+  return nil
+end
+
+local function can_send_kitty()
+  return type(vim.api.nvim_ui_send) == "function" or kitty_stderr_channel() ~= nil
+end
+
+local function send_kitty(data)
+  if type(vim.api.nvim_ui_send) == "function" then
+    vim.api.nvim_ui_send(data)
+    return true
+  end
+  local channel = kitty_stderr_channel()
+  if channel ~= nil then
+    vim.api.nvim_chan_send(channel, data)
+    return true
+  end
+  return false
 end
 
 local function env_present(name)
@@ -89,7 +110,7 @@ local function finish_probe(status)
 end
 
 local function start_probe()
-  if is_tmux() or probe.pending or probe.status ~= "unknown" or not can_probe_kitty() then
+  if is_tmux() or probe.pending or probe.status ~= "unknown" or not can_send_kitty() then
     return
   end
 
@@ -109,7 +130,7 @@ local function start_probe()
     end,
   })
 
-  vim.api.nvim_ui_send(("\027_Gi=%d,s=1,v=1,a=q,t=d,f=24;AAAA\027\\\027[c"):format(request_id))
+  send_kitty(("\027_Gi=%d,s=1,v=1,a=q,t=d,f=24;AAAA\027\\\027[c"):format(request_id))
   vim.defer_fn(function()
     if probe.pending and probe.request_id == request_id then
       finish_probe("unsupported")
@@ -118,6 +139,9 @@ local function start_probe()
 end
 
 local function kitty_supported()
+  if not can_send_kitty() then
+    return false
+  end
   if is_tmux() then
     return tmux_passthrough_enabled()
       and (known_kitty_terminal() or Config.image.backend == "kitty")
@@ -140,6 +164,9 @@ local function kitty_supported()
 end
 
 local function kitty_unavailable_reason()
+  if not can_send_kitty() then
+    return "raw terminal output is unavailable for Kitty graphics"
+  end
   if is_tmux() and not tmux_passthrough_enabled() then
     return "tmux allow-passthrough is not enabled"
   end

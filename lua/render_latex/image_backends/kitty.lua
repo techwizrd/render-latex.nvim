@@ -57,7 +57,19 @@ local function tmux_wrap(data)
 end
 
 local function send(data)
-  vim.api.nvim_ui_send(tmux_wrap(data))
+  data = tmux_wrap(data)
+  if type(vim.api.nvim_ui_send) == "function" then
+    vim.api.nvim_ui_send(data)
+    return
+  end
+
+  local stderr = tonumber(vim.v.stderr)
+  if type(vim.api.nvim_chan_send) == "function" and stderr ~= nil and stderr > 0 then
+    vim.api.nvim_chan_send(stderr, data)
+    return
+  end
+
+  error("raw terminal output is unavailable for Kitty graphics")
 end
 
 local function send_batched(data)
