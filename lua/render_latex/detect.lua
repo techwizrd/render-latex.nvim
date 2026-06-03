@@ -66,14 +66,14 @@ local function math_block_lines(lines)
   return block
 end
 
-local function equation_key(start_row, end_row, text)
-  return Util.sha256(("%d:%d:%s"):format(start_row, end_row, text))
+local function equation_key(start_row, end_row, delimiter)
+  return Util.sha256(("%d:%d:%s"):format(start_row, end_row, delimiter or ""))
 end
 
 local function finalize(lines, start_row, end_row, delimiter)
   local text = normalize_text(table.concat(math_block_lines(lines), "\n"))
   return {
-    key = equation_key(start_row, end_row, text),
+    key = equation_key(start_row, end_row, delimiter),
     start_row = start_row,
     end_row = end_row,
     text = text,
@@ -86,7 +86,7 @@ end
 local function finalize_text(text, start_row, end_row, delimiter, quoted)
   local normalized = normalize_text(text)
   return {
-    key = equation_key(start_row, end_row, normalized),
+    key = equation_key(start_row, end_row, delimiter),
     start_row = start_row,
     end_row = end_row,
     text = normalized,
@@ -753,7 +753,7 @@ function M.update(equations, bufnr, start_row, old_end_row, new_end_row)
           end_row = equation.end_row + line_delta,
         })
         next_equation.key =
-          equation_key(next_equation.start_row, next_equation.end_row, next_equation.text)
+          equation_key(next_equation.start_row, next_equation.end_row, next_equation.delimiter)
       end
       if next_equation.start_row >= 0 and next_equation.end_row < line_count then
         next_equations[#next_equations + 1] = next_equation

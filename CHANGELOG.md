@@ -6,6 +6,10 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ## Unreleased
 
+### Changed
+
+- Added default-on live previews below focused display equations while editing, keeping raw LaTeX visible during edits.
+
 ## 0.1.0-rc4 - 2026-05-31
 
 ### Changed

@@ -24,6 +24,7 @@
 ---@field inline false|'conceal'|'content'|'highlight'
 ---@field inline_symbols boolean
 ---@field hide_on_cmdline boolean
+---@field live_preview boolean
 
 ---@class render_latex.ImageOptions
 ---@field backend 'auto'|'nvim'|'kitty'
@@ -91,6 +92,7 @@ local defaults = {
     inline = "conceal",
     inline_symbols = true,
     hide_on_cmdline = false,
+    live_preview = true,
   },
   image = {
     backend = "auto",
@@ -180,6 +182,7 @@ function M.setup(opts)
     ["render.placeholder"] = { config.render.placeholder, "boolean" },
     ["render.inline_symbols"] = { config.render.inline_symbols, "boolean" },
     ["render.hide_on_cmdline"] = { config.render.hide_on_cmdline, "boolean" },
+    ["render.live_preview"] = { config.render.live_preview, "boolean" },
     ["render.background"] = { config.render.background, "string" },
     ["render.equation_label_format"] = { config.render.equation_label_format, "string" },
     ["tmux.install_cleanup_hooks"] = { config.tmux.install_cleanup_hooks, "boolean" },

@@ -16,7 +16,7 @@ Fast display-math rendering for Markdown in Neovim, with inline math that stays 
 
 `render-latex.nvim` is for people who write notes, docs, research, or homework in Markdown and want equations to be readable without giving up plain-text editing.
 
-Raw LaTeX stays in your buffer. Display equations render when your terminal supports images, and inline math stays lightweight and cursor-friendly. It also plays well with [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) and [obsidian.nvim](https://github.com/epwalsh/obsidian.nvim/).
+Raw LaTeX stays in your buffer. Display equations render when your terminal supports images, and inline math stays lightweight and cursor-friendly. It also plays well with [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) and [obsidian.nvim](https://github.com/obsidian-nvim/obsidian.nvim/).
 
 ## Quickstart
 
@@ -61,7 +61,7 @@ The plugin sets itself up with useful defaults and installs the matching prebuil
 - Uses a persistent Rust worker that starts once, batches visible equations, and keeps a warm cache and directional prefetching.
 - Installs the matching prebuilt worker automatically on common platforms, with a manual source-build path when needed.
 - Chooses a safe image backend for Neovim image support or Kitty graphics, including tmux passthrough.
-- Plays nicely with Markdown note-taking setups, like [`render-markdown.nvim`](https://github.com/MeanderingProgrammer/render-markdown.nvim), [`obsidian.nvim`](https://github.com/epwalsh/obsidian.nvim), and [jupynvim](https://github.com/sheng-tse/jupynvim) (for Jupyter support), instead of trying to own the whole buffer.
+- Plays nicely with Markdown note-taking setups, like [`render-markdown.nvim`](https://github.com/MeanderingProgrammer/render-markdown.nvim), [`obsidian.nvim`](https://github.com/obsidian-nvim/obsidian.nvim), and [jupynvim](https://github.com/sheng-tse/jupynvim) (for Jupyter support), instead of trying to own the whole buffer.
 
 The goal is intentionally narrow: make equations in Markdown easier to read in Neovim without replacing your Markdown renderer, note-taking setup, or LaTeX workflow.
 
@@ -84,6 +84,7 @@ require("render_latex").setup({
     preset = "match_text", -- "compact" or "presentation"
     inline = "conceal", -- "content", "highlight", or false
     inline_symbols = true,
+    live_preview = true,
     hide_on_cmdline = false,
   },
 })
@@ -203,7 +204,7 @@ Terminal support still matters after the worker is installed. Use Neovim's image
 
 ## Acknowledgements
 
-`render-latex.nvim` stands on other people's work. [RaTeX](https://github.com/erweixin/RaTeX) does the hard layout and rendering work in the Rust worker. [`render-markdown.nvim`](https://github.com/MeanderingProgrammer/render-markdown.nvim) and [`obsidian.nvim`](https://github.com/epwalsh/obsidian.nvim) shaped how this plugin approaches compatibility: it should complement Markdown and note-taking workflows, not fight them. Feedback and interest from [`r/neovim`](https://reddit.com/r/neovim) helped motivate me to get an initial release together.
+`render-latex.nvim` stands on other people's work. [RaTeX](https://github.com/erweixin/RaTeX) does the hard layout and rendering work in the Rust worker. [`render-markdown.nvim`](https://github.com/MeanderingProgrammer/render-markdown.nvim), the original `obsidian.nvim` project, and its [community-maintained fork](https://github.com/obsidian-nvim/obsidian.nvim) shaped how this plugin approaches compatibility: it should complement Markdown and note-taking workflows, not fight them. Feedback and interest from [`r/neovim`](https://reddit.com/r/neovim) helped motivate me to get an initial release together.
 
 ## Status
 

@@ -84,6 +84,20 @@ describe("render_latex.detect", function()
     assert.are.equal(0, #equations)
   end)
 
+  it("keeps display math keys stable across text edits", function()
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$" })
+    local equations = detect.scan(buf)
+    local key = equations[1].key
+
+    vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "y^2" })
+    equations = detect.update(equations, buf, 1, 1, 1)
+
+    assert.are.equal(1, #equations)
+    assert.are.equal(key, equations[1].key)
+    assert.are.equal("y^2", equations[1].text)
+  end)
+
   it("shifts cached equations after deleted lines", function()
     local lines = {}
     for index = 1, 60 do
@@ -3345,6 +3359,224 @@ describe("render_latex.renderer", function()
     end
     assert.are.equal(2, request_count)
     assert.are.same({ "x^2", "y^2" }, requested)
+  end)
+
+  it("shows a live preview below focused equations while editing", function()
+    config.setup({ render_modes = { "i" } })
+    local previous_get_mode = vim.api.nvim_get_mode
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
+    local previous_readblob = vim.fn.readblob
+    local previous_screenpos = vim.fn.screenpos
+    local request_count = 0
+    local requested = {}
+    local set_count = 0
+
+    vim.api.nvim_get_mode = function()
+      return { mode = "i", blocking = false }
+    end
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    image_backend.get = function()
+      return {
+        del = function() end,
+        set = function()
+          set_count = set_count + 1
+          return set_count
+        end,
+      },
+        "test"
+    end
+    worker.request_batch = function(items, callback)
+      request_count = request_count + 1
+      requested[#requested + 1] = items[1].formula
+      callback({
+        {
+          error = nil,
+          result = {
+            width_px = 10,
+            height_px = 10,
+            png_path = "/tmp/render-latex-live-preview-test.png",
+            cache_key = "live-preview-test-" .. request_count,
+          },
+        },
+      }, nil)
+    end
+    viewport.viewport_range = function()
+      return 0, 4
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 20
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+    vim.fn.screenpos = function(_, line)
+      return { row = line, col = 1, endcol = 1, curscol = 1 }
+    end
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "markdown"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+
+      renderer.set_suppressed("cmdline", false)
+      renderer.set_suppressed("floating", false)
+      renderer.attach(buf)
+      renderer.render(buf)
+      vim.wait(100, function()
+        return set_count == 1
+      end)
+
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      renderer.render(buf)
+      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "y^2" })
+      renderer.on_text_changed(buf, false)
+      renderer.render(buf)
+      local preview_found = vim.wait(1000, function()
+        local marks = vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true })
+        for _, mark in ipairs(marks) do
+          if mark[4].virt_lines ~= nil then
+            return true
+          end
+        end
+        return false
+      end)
+      assert.is_true(preview_found)
+
+      local marks = vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true })
+      for _, mark in ipairs(marks) do
+        if mark[4].virt_lines ~= nil then
+          assert.is_nil(mark[4].conceal)
+          break
+        end
+      end
+    end)
+
+    vim.api.nvim_get_mode = previous_get_mode
+    worker.request_batch = previous_request_batch
+    viewport.viewport_range = previous_viewport_range
+    viewport.visible_text_bounds = previous_visible_text_bounds
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    vim.fn.readblob = previous_readblob
+    vim.fn.screenpos = previous_screenpos
+    config.setup()
+
+    if not ok then
+      error(err)
+    end
+    assert.are.equal(2, request_count)
+    assert.are.same({ "x^2", "y^2" }, requested)
+  end)
+
+  it("keeps stale live previews visible while rerendering edits", function()
+    config.setup({ render_modes = { "i" } })
+    local previous_get_mode = vim.api.nvim_get_mode
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
+    local previous_readblob = vim.fn.readblob
+    local previous_screenpos = vim.fn.screenpos
+    local callbacks = {}
+    local requested = {}
+    local set_count = 0
+    local del_count = 0
+
+    vim.api.nvim_get_mode = function()
+      return { mode = "i", blocking = false }
+    end
+    image_backend.status = function()
+      return { available = true, name = "test" }
+    end
+    image_backend.get = function()
+      return {
+        del = function()
+          del_count = del_count + 1
+        end,
+        set = function()
+          set_count = set_count + 1
+          return set_count
+        end,
+      },
+        "test"
+    end
+    worker.request_batch = function(items, callback)
+      requested[#requested + 1] = items[1].formula
+      callbacks[#callbacks + 1] = callback
+    end
+    viewport.viewport_range = function()
+      return 0, 4
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 20
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+    vim.fn.screenpos = function(_, line)
+      return { row = line, col = 1, endcol = 1, curscol = 1 }
+    end
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "markdown"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+      renderer.set_suppressed("cmdline", false)
+      renderer.set_suppressed("floating", false)
+      renderer.attach(buf)
+      renderer.render(buf)
+      assert.are.equal(1, #callbacks)
+      callbacks[1]({
+        {
+          error = nil,
+          result = {
+            width_px = 10,
+            height_px = 10,
+            png_path = "/tmp/render-latex-stale-live-preview-test.png",
+            cache_key = "stale-live-preview-test",
+          },
+        },
+      }, nil)
+      vim.wait(100, function()
+        return set_count == 1
+      end)
+      del_count = 0
+
+      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "y^2" })
+      renderer.on_text_changed(buf, false)
+      renderer.render(buf)
+
+      assert.are.equal(2, #callbacks)
+      assert.are.equal(1, set_count)
+      assert.are.equal(0, del_count)
+      assert.are.same({ "x^2", "y^2" }, requested)
+    end)
+
+    vim.api.nvim_get_mode = previous_get_mode
+    worker.request_batch = previous_request_batch
+    viewport.viewport_range = previous_viewport_range
+    viewport.visible_text_bounds = previous_visible_text_bounds
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    vim.fn.readblob = previous_readblob
+    vim.fn.screenpos = previous_screenpos
+    config.setup()
+
+    if not ok then
+      error(err)
+    end
   end)
 
   it("can inspect and toggle the current equation", function()

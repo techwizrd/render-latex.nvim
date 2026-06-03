@@ -43,6 +43,7 @@ render-latex-render.foreground	render-latex.txt	/*render-latex-render.foreground
 render-latex-render.hide_on_cmdline	render-latex.txt	/*render-latex-render.hide_on_cmdline*
 render-latex-render.inline	render-latex.txt	/*render-latex-render.inline*
 render-latex-render.inline_symbols	render-latex.txt	/*render-latex-render.inline_symbols*
+render-latex-render.live_preview	render-latex.txt	/*render-latex-render.live_preview*
 render-latex-render.match_text_color	render-latex.txt	/*render-latex-render.match_text_color*
 render-latex-render.match_text_size	render-latex.txt	/*render-latex-render.match_text_size*
 render-latex-render.padding	render-latex.txt	/*render-latex-render.padding*

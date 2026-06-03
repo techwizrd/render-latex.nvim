@@ -94,6 +94,7 @@ Common options:
       preset = "match_text", -- "compact" or "presentation"
       inline = "conceal",    -- "content", "highlight", or false
       inline_symbols = true,
+      live_preview = true,
       hide_on_cmdline = false,
       background = "transparent",
     },
@@ -248,11 +249,16 @@ Render options:
 `render.inline`          Inline math fallback mode: `"conceal"`, `"content"`,
                          `"highlight"`, or `false`. Default: `"conceal"`.
 
-                                        *render-latex-render.inline_symbols*
+                                         *render-latex-render.inline_symbols*
 `render.inline_symbols`  Replace common inline LaTeX commands with readable
                          symbols in conceal mode. Default: `true`.
 
-                                       *render-latex-render.hide_on_cmdline*
+                                          *render-latex-render.live_preview*
+`render.live_preview`   While editing a focused display equation, keep the raw
+                         source visible and show a live rendered preview below
+                         it. Default: `true`.
+
+                                        *render-latex-render.hide_on_cmdline*
 `render.hide_on_cmdline` Hide images while command-line mode is active. Default:
                          `false`.
 

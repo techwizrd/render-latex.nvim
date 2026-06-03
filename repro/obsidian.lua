@@ -13,7 +13,7 @@ require("lazy").setup({
       lazy = false,
     },
     {
-      "epwalsh/obsidian.nvim",
+      "obsidian-nvim/obsidian.nvim",
       version = "*",
       lazy = false,
       dependencies = { "nvim-lua/plenary.nvim" },

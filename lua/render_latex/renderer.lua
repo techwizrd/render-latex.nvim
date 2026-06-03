@@ -33,6 +33,14 @@ local function should_hide_focused_equation(context, state, key)
   return state.dirty[key] == true or mode:match("^[iR]") ~= nil
 end
 
+local function should_live_preview_focused_equation(context, state, key)
+  if context.hide_focused_equation or not Config.render.live_preview then
+    return false
+  end
+  local mode = vim.api.nvim_get_mode().mode
+  return state.dirty[key] == true or mode:match("^[iR]") ~= nil
+end
+
 ---@class render_latex.BufferState
 ---@field marks table<string, integer>
 ---@field images table<integer, table<string, integer>>
@@ -722,6 +730,35 @@ local function ensure_mark(bufnr, equation, meta, context)
   state.mark_layouts[equation.key] = layout
 end
 
+local function ensure_preview_mark(bufnr, equation, meta)
+  local state = get_buffer_state(bufnr)
+  local layout = table.concat({
+    "preview",
+    equation.end_row,
+    meta.height_cells,
+  }, ":")
+  if state.marks[equation.key] ~= nil and state.mark_layouts[equation.key] == layout then
+    return
+  end
+
+  local virt_lines = {}
+  for _ = 1, meta.height_cells do
+    virt_lines[#virt_lines + 1] = { { " ", "Conceal" } }
+  end
+
+  if state.marks[equation.key] ~= nil then
+    pcall(vim.api.nvim_buf_del_extmark, bufnr, Config.ns, state.marks[equation.key])
+  end
+  clear_source_line_marks(bufnr, state, equation.key)
+
+  state.marks[equation.key] = vim.api.nvim_buf_set_extmark(bufnr, Config.ns, equation.end_row, 0, {
+    virt_lines = virt_lines,
+    hl_mode = "combine",
+    priority = 250,
+  })
+  state.mark_layouts[equation.key] = layout
+end
+
 local function collect_window_snapshot(bufnr, viewport_state, prefetch)
   local snapshot = {
     winids = {},
@@ -802,12 +839,13 @@ local function update_label(context, bufnr, state, equation, visible_index)
   Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
 end
 
-local function update_image(bufnr, winid, equation, meta, backend, window)
+local function update_image(bufnr, winid, equation, meta, backend, window, preview)
   if not Util.win_is_valid(winid) then
     return false
   end
 
-  local position = vim.fn.screenpos(winid, equation.start_row + 1, 1)
+  local position_row = preview and equation.end_row or equation.start_row
+  local position = vim.fn.screenpos(winid, position_row + 1, 1)
   if type(position) ~= "table" or position.row == 0 then
     return false
   end
@@ -818,7 +856,7 @@ local function update_image(bufnr, winid, equation, meta, backend, window)
     return false
   end
 
-  local row = math.max(position.row, text_top)
+  local row = math.max(position.row + (preview and 1 or 0), text_top)
   local max_height = text_bottom - row + 1
   if max_height <= 0 or meta.height_cells > max_height then
     return false
@@ -943,7 +981,45 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
       active[equation.key] = true
       clear_suppressed_label(context, bufnr, state, equation)
       local meta = state.metadata[equation.key]
-      if focused[equation.key] and should_hide_focused_equation(context, state, equation.key) then
+      if
+        focused[equation.key]
+        and should_live_preview_focused_equation(context, state, equation.key)
+      then
+        Annotations.clear_label(bufnr, Config.ns, state, equation.key)
+        if not metadata_matches(meta, equation, option_cache) then
+          if meta ~= nil and backend ~= nil then
+            ensure_preview_mark(bufnr, equation, meta)
+            for _, winid in ipairs(snapshot.winids) do
+              if
+                update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
+              then
+                active_images[winid] = active_images[winid] or {}
+                active_images[winid][equation.key] = true
+              end
+            end
+          end
+          needs_render = true
+        elseif backend == nil then
+          clear_equation_display(bufnr, equation.key, backend, true)
+          if last_backend_warning ~= backend_status.reason then
+            last_backend_warning = backend_status.reason
+            Util.warn(backend_status.reason or "No image backend is available")
+          end
+          needs_render = true
+        else
+          ensure_preview_mark(bufnr, equation, meta)
+          for _, winid in ipairs(snapshot.winids) do
+            if
+              update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
+            then
+              active_images[winid] = active_images[winid] or {}
+              active_images[winid][equation.key] = true
+            end
+          end
+        end
+      elseif
+        focused[equation.key] and should_hide_focused_equation(context, state, equation.key)
+      then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.manual_raw[equation.key] or state.delayed_render[equation.key] then
         clear_equation_display(bufnr, equation.key, backend, true)
@@ -1117,7 +1193,41 @@ function M.render(bufnr)
       if
         focused_keys[equation.key] and should_hide_focused_equation(context, state, equation.key)
       then
-        clear_equation_display(bufnr, equation.key, backend, true)
+        if should_live_preview_focused_equation(context, state, equation.key) then
+          Annotations.clear_label(bufnr, Config.ns, state, equation.key)
+          if not metadata_matches(meta, equation, option_cache) then
+            if meta ~= nil and backend_status.available then
+              ensure_preview_mark(bufnr, equation, meta)
+              for _, winid in ipairs(snapshot.winids) do
+                if
+                  update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
+                then
+                  active_images[winid] = active_images[winid] or {}
+                  active_images[winid][equation.key] = true
+                end
+              end
+            end
+            batch[#batch + 1] = equation
+          elseif not backend_status.available then
+            clear_equation_display(bufnr, equation.key, backend, true)
+            if last_backend_warning ~= backend_status.reason then
+              last_backend_warning = backend_status.reason
+              Util.warn(backend_status.reason or "No image backend is available")
+            end
+          else
+            ensure_preview_mark(bufnr, equation, meta)
+            for _, winid in ipairs(snapshot.winids) do
+              if
+                update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
+              then
+                active_images[winid] = active_images[winid] or {}
+                active_images[winid][equation.key] = true
+              end
+            end
+          end
+        else
+          clear_equation_display(bufnr, equation.key, backend, true)
+        end
       elseif state.manual_raw[equation.key] then
         clear_equation_display(bufnr, equation.key, backend, true)
       elseif state.delayed_render[equation.key] then
