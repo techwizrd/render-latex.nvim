@@ -67,4 +67,6 @@ end, {
   end,
 })
 
-require("render_latex").setup()
+if not require("render_latex").did_setup then
+  require("render_latex").setup()
+end
