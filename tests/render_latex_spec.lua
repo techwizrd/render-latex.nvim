@@ -1727,6 +1727,19 @@ describe("render_latex.setup", function()
 end)
 
 describe("render_latex.ui", function()
+  it("keeps completion popups suppressed", function()
+    local previous_pumvisible = vim.fn.pumvisible
+    vim.fn.pumvisible = function()
+      return 1
+    end
+
+    local ok, detected = pcall(ui.has_popup_or_floating_windows)
+    vim.fn.pumvisible = previous_pumvisible
+
+    assert.is_true(ok)
+    assert.is_true(detected)
+  end)
+
   it("detects floating windows independently of cmdline settings", function()
     local buf = vim.api.nvim_create_buf(false, true)
     local win = vim.api.nvim_open_win(buf, false, {
@@ -1740,6 +1753,75 @@ describe("render_latex.ui", function()
 
     local ok, detected = pcall(ui.has_popup_or_floating_windows)
     vim.api.nvim_win_close(win, true)
+
+    assert.is_true(ok)
+    assert.is_true(detected)
+  end)
+
+  it("ignores non-focusable utility floating windows", function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    local win = vim.api.nvim_open_win(buf, false, {
+      relative = "editor",
+      row = 1,
+      col = 1,
+      width = 10,
+      height = 1,
+      style = "minimal",
+      focusable = false,
+    })
+
+    local ok, detected = pcall(ui.has_popup_or_floating_windows)
+    vim.api.nvim_win_close(win, true)
+
+    assert.is_true(ok)
+    assert.is_false(detected)
+  end)
+
+  it("ignores command-line UI floats when command-line hiding is disabled", function()
+    config.setup({ render = { hide_on_cmdline = false } })
+    local previous_getcmdtype = vim.fn.getcmdtype
+    vim.fn.getcmdtype = function()
+      return ":"
+    end
+    local buf = vim.api.nvim_create_buf(false, true)
+    local win = vim.api.nvim_open_win(buf, false, {
+      relative = "editor",
+      row = 1,
+      col = 1,
+      width = 10,
+      height = 1,
+      style = "minimal",
+    })
+
+    local ok, detected = pcall(ui.has_popup_or_floating_windows)
+    vim.api.nvim_win_close(win, true)
+    vim.fn.getcmdtype = previous_getcmdtype
+    config.setup()
+
+    assert.is_true(ok)
+    assert.is_false(detected)
+  end)
+
+  it("detects command-line floats when command-line hiding is enabled", function()
+    config.setup({ render = { hide_on_cmdline = true } })
+    local previous_getcmdtype = vim.fn.getcmdtype
+    vim.fn.getcmdtype = function()
+      return ":"
+    end
+    local buf = vim.api.nvim_create_buf(false, true)
+    local win = vim.api.nvim_open_win(buf, false, {
+      relative = "editor",
+      row = 1,
+      col = 1,
+      width = 10,
+      height = 1,
+      style = "minimal",
+    })
+
+    local ok, detected = pcall(ui.has_popup_or_floating_windows)
+    vim.api.nvim_win_close(win, true)
+    vim.fn.getcmdtype = previous_getcmdtype
+    config.setup()
 
     assert.is_true(ok)
     assert.is_true(detected)
