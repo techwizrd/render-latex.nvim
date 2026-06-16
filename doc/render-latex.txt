@@ -37,11 +37,10 @@ and:
 Inline math is intentionally not image-rendered. It uses highlights and conceal
 for smooth editing and predictable cursor behavior.
 
-Images are hidden while completion popups or focusable floating windows are
-open. Plain command-line typing does not hide images by default; opt in with
-`render.hide_on_cmdline = true`. When command-line hiding is disabled, cmdline
-UI floats are ignored but completion popups still hide images until
-command-line mode exits. Non-focusable utility floats are ignored.
+Images are hidden while completion popups are open. Plain command-line typing
+does not hide images by default; opt in with `render.hide_on_cmdline = true`.
+Floating windows from other plugins do not hide images, but active float details
+are reported by `:RenderLatex doctor` for troubleshooting.
 
 ===============================================================================
 REQUIREMENTS                                      *render-latex-requirements*

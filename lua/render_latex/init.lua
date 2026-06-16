@@ -261,6 +261,7 @@ function M.doctor_lines()
   local Install = require("render_latex.install")
   local Integrations = require("render_latex.integrations")
   local Renderer = require("render_latex.renderer")
+  local Ui = require("render_latex.ui")
   local Worker = require("render_latex.worker")
 
   local bufnr = vim.api.nvim_get_current_buf()
@@ -272,6 +273,7 @@ function M.doctor_lines()
   local render = Renderer.resolved_options()
   local source = require("render_latex.sources").status(bufnr)
   local suppression = Renderer.suppression_status()
+  local floats = Ui.floating_windows()
   local filetype = vim.bo[bufnr].filetype
 
   local lines = {
@@ -313,7 +315,24 @@ function M.doctor_lines()
     "conceallevel: " .. tostring(vim.wo.conceallevel),
     "concealcursor: " .. tostring(vim.wo.concealcursor),
     "suppressed by cmdline: " .. tostring(suppression.cmdline),
-    "image placement suppressed by popups/floating windows: " .. tostring(suppression.floating),
+    "image placement suppressed by popup/cmdline UI: " .. tostring(suppression.floating),
+    "active floating windows: " .. tostring(#floats),
+  })
+
+  for _, float in ipairs(floats) do
+    lines[#lines + 1] = table.concat({
+      "- winid: " .. tostring(float.winid),
+      "relative: " .. tostring(float.relative),
+      "focusable: " .. tostring(float.focusable),
+      "zindex: " .. tostring(float.zindex),
+      "row: " .. tostring(float.row),
+      "col: " .. tostring(float.col),
+      "width: " .. tostring(float.width),
+      "height: " .. tostring(float.height),
+    }, ", ")
+  end
+
+  vim.list_extend(lines, {
     "",
     "## Worker",
     "",
