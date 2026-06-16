@@ -1573,7 +1573,8 @@ describe("render_latex.setup", function()
   end)
 
   it("requeues all visible markdown buffers on ColorScheme", function()
-    local previous_list_wins = vim.api.nvim_list_wins
+    local previous_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
+    local previous_win_is_valid = vim.api.nvim_win_is_valid
     local previous_win_get_config = vim.api.nvim_win_get_config
     local previous_win_get_buf = vim.api.nvim_win_get_buf
     local previous_attach = renderer.attach
@@ -1606,8 +1607,11 @@ describe("render_latex.setup", function()
     local right = vim.api.nvim_create_buf(false, true)
     vim.bo[left].filetype = "markdown"
     vim.bo[right].filetype = "markdown"
-    vim.api.nvim_list_wins = function()
+    vim.api.nvim_tabpage_list_wins = function()
       return { 101, 202 }
+    end
+    vim.api.nvim_win_is_valid = function(winid)
+      return winid == 101 or winid == 202
     end
     vim.api.nvim_win_get_config = function()
       return { relative = "" }
@@ -1622,7 +1626,8 @@ describe("render_latex.setup", function()
 
     vim.api.nvim_exec_autocmds("ColorScheme", {})
 
-    vim.api.nvim_list_wins = previous_list_wins
+    vim.api.nvim_tabpage_list_wins = previous_tabpage_list_wins
+    vim.api.nvim_win_is_valid = previous_win_is_valid
     vim.api.nvim_win_get_config = previous_win_get_config
     vim.api.nvim_win_get_buf = previous_win_get_buf
     renderer.attach = previous_attach
@@ -1636,6 +1641,213 @@ describe("render_latex.setup", function()
     table.sort(queued)
     assert.are.same({ left, right }, attached)
     assert.are.same({ left, right }, queued)
+  end)
+
+  it("hides terminal images on context leave events", function()
+    local previous_hide_visible = renderer.hide_visible
+    local hide_count = 0
+
+    renderer.hide_visible = function()
+      hide_count = hide_count + 1
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    for _, event in ipairs({ "BufLeave", "TabLeave", "WinLeave" }) do
+      vim.api.nvim_exec_autocmds(event, { modeline = false })
+    end
+
+    renderer.hide_visible = previous_hide_visible
+
+    assert.are.equal(3, hide_count)
+  end)
+
+  it("hides terminal images on BufWinLeave", function()
+    local previous_hide_visible = renderer.hide_visible
+    local previous_detach_inactive_windows = renderer.detach_inactive_windows
+    local hide_count = 0
+    local detached_bufnr
+
+    renderer.hide_visible = function()
+      hide_count = hide_count + 1
+    end
+    renderer.detach_inactive_windows = function(bufnr)
+      detached_bufnr = bufnr
+    end
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    render_latex.setup({ install = { auto = false } })
+    vim.api.nvim_exec_autocmds("BufWinLeave", { buffer = buf, modeline = false })
+
+    renderer.hide_visible = previous_hide_visible
+    renderer.detach_inactive_windows = previous_detach_inactive_windows
+
+    assert.are.equal(1, hide_count)
+    assert.are.equal(buf, detached_bufnr)
+  end)
+
+  it("hides terminal images on WinClosed", function()
+    local previous_hide_visible = renderer.hide_visible
+    local previous_detach_winid = renderer.detach_winid
+    local hide_count = 0
+    local detached_winid
+
+    renderer.hide_visible = function()
+      hide_count = hide_count + 1
+    end
+    renderer.detach_winid = function(winid)
+      detached_winid = winid
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    vim.api.nvim_exec_autocmds("WinClosed", { pattern = "42", modeline = false })
+
+    renderer.hide_visible = previous_hide_visible
+    renderer.detach_winid = previous_detach_winid
+
+    assert.are.equal(1, hide_count)
+    assert.are.equal(42, detached_winid)
+  end)
+
+  it("requeues visible markdown buffers on context enter events", function()
+    local previous_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
+    local previous_win_is_valid = vim.api.nvim_win_is_valid
+    local previous_win_get_config = vim.api.nvim_win_get_config
+    local previous_win_get_buf = vim.api.nvim_win_get_buf
+    local previous_attach = renderer.attach
+    local previous_queue = renderer.queue
+    local previous_suppression = renderer.suppression_status
+    local previous_set_suppressed = renderer.set_suppressed
+    local previous_has_popup = ui.has_popup_or_floating_windows
+    local previous_getcmdtype = vim.fn.getcmdtype
+    local attached = {}
+    local queued = {}
+
+    renderer.attach = function(bufnr)
+      attached[#attached + 1] = bufnr
+    end
+    renderer.queue = function(bufnr)
+      queued[#queued + 1] = bufnr
+    end
+    renderer.suppression_status = function()
+      return { cmdline = false, floating = false }
+    end
+    renderer.set_suppressed = function() end
+    ui.has_popup_or_floating_windows = function()
+      return false
+    end
+    vim.fn.getcmdtype = function()
+      return ""
+    end
+
+    local markdown = vim.api.nvim_create_buf(false, true)
+    local text = vim.api.nvim_create_buf(false, true)
+    vim.bo[markdown].filetype = "markdown"
+    vim.bo[text].filetype = "text"
+    vim.api.nvim_set_current_buf(markdown)
+    vim.api.nvim_tabpage_list_wins = function()
+      return { 101, 202 }
+    end
+    vim.api.nvim_win_is_valid = function(winid)
+      return winid == 101 or winid == 202
+    end
+    vim.api.nvim_win_get_config = function()
+      return { relative = "" }
+    end
+    vim.api.nvim_win_get_buf = function(winid)
+      return winid == 101 and markdown or text
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    attached = {}
+    queued = {}
+
+    for _, event in ipairs({ "BufEnter", "BufWinEnter", "TabEnter", "WinEnter" }) do
+      vim.api.nvim_exec_autocmds(event, { buffer = markdown, modeline = false })
+    end
+
+    vim.api.nvim_tabpage_list_wins = previous_tabpage_list_wins
+    vim.api.nvim_win_is_valid = previous_win_is_valid
+    vim.api.nvim_win_get_config = previous_win_get_config
+    vim.api.nvim_win_get_buf = previous_win_get_buf
+    renderer.attach = previous_attach
+    renderer.queue = previous_queue
+    renderer.suppression_status = previous_suppression
+    renderer.set_suppressed = previous_set_suppressed
+    ui.has_popup_or_floating_windows = previous_has_popup
+    vim.fn.getcmdtype = previous_getcmdtype
+
+    assert.are.same({ markdown, markdown, markdown, markdown }, attached)
+    assert.are.same({ markdown, markdown, markdown, markdown }, queued)
+  end)
+
+  it("does not queue markdown buffers from inactive tabs", function()
+    local previous_list_wins = vim.api.nvim_list_wins
+    local previous_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
+    local previous_win_is_valid = vim.api.nvim_win_is_valid
+    local previous_win_get_config = vim.api.nvim_win_get_config
+    local previous_win_get_buf = vim.api.nvim_win_get_buf
+    local previous_attach = renderer.attach
+    local previous_queue = renderer.queue
+    local previous_suppression = renderer.suppression_status
+    local previous_set_suppressed = renderer.set_suppressed
+    local previous_has_popup = ui.has_popup_or_floating_windows
+    local previous_getcmdtype = vim.fn.getcmdtype
+    local queued = {}
+
+    renderer.attach = function() end
+    renderer.queue = function(bufnr)
+      queued[#queued + 1] = bufnr
+    end
+    renderer.suppression_status = function()
+      return { cmdline = false, floating = false }
+    end
+    renderer.set_suppressed = function() end
+    ui.has_popup_or_floating_windows = function()
+      return false
+    end
+    vim.fn.getcmdtype = function()
+      return ""
+    end
+
+    local current = vim.api.nvim_create_buf(false, true)
+    local inactive = vim.api.nvim_create_buf(false, true)
+    vim.bo[current].filetype = "text"
+    vim.bo[inactive].filetype = "markdown"
+    vim.api.nvim_set_current_buf(current)
+    vim.api.nvim_list_wins = function()
+      return { 101, 202 }
+    end
+    vim.api.nvim_tabpage_list_wins = function()
+      return { 101 }
+    end
+    vim.api.nvim_win_is_valid = function(winid)
+      return winid == 101 or winid == 202
+    end
+    vim.api.nvim_win_get_config = function()
+      return { relative = "" }
+    end
+    vim.api.nvim_win_get_buf = function(winid)
+      return winid == 101 and current or inactive
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    queued = {}
+
+    vim.api.nvim_exec_autocmds("TabEnter", { buffer = current, modeline = false })
+
+    vim.api.nvim_list_wins = previous_list_wins
+    vim.api.nvim_tabpage_list_wins = previous_tabpage_list_wins
+    vim.api.nvim_win_is_valid = previous_win_is_valid
+    vim.api.nvim_win_get_config = previous_win_get_config
+    vim.api.nvim_win_get_buf = previous_win_get_buf
+    renderer.attach = previous_attach
+    renderer.queue = previous_queue
+    renderer.suppression_status = previous_suppression
+    renderer.set_suppressed = previous_set_suppressed
+    ui.has_popup_or_floating_windows = previous_has_popup
+    vim.fn.getcmdtype = previous_getcmdtype
+
+    assert.are.same({}, queued)
   end)
 
   it("uses the lightweight refresh path on WinScrolled", function()
@@ -1668,8 +1880,10 @@ describe("render_latex.setup", function()
     end
 
     local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(buf)
     vim.bo[buf].filetype = "markdown"
     render_latex.setup({ install = { auto = false } })
+    queued = {}
 
     vim.api.nvim_exec_autocmds("WinScrolled", { buffer = buf, modeline = false })
 
@@ -1710,8 +1924,10 @@ describe("render_latex.setup", function()
     end
 
     local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(buf)
     vim.bo[buf].filetype = "markdown"
     render_latex.setup({ install = { auto = false } })
+    queued = {}
 
     vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf, modeline = false })
 
@@ -2600,6 +2816,37 @@ describe("render_latex.worker", function()
 end)
 
 describe("render_latex.renderer", function()
+  it("does not run whole-buffer inline fallback for inactive-tab buffers", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local previous_inline = detect.inline
+    local previous_inline_ranges = detect.inline_ranges
+    local inline_count = 0
+    local inline_ranges_count = 0
+
+    detect.inline = function()
+      inline_count = inline_count + 1
+      return {}
+    end
+    detect.inline_ranges = function(_, ranges)
+      inline_ranges_count = inline_ranges_count + 1
+      assert.are.same({}, ranges)
+      return {}
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "inline $x$", "after" })
+
+    renderer.render(buf)
+
+    detect.inline = previous_inline
+    detect.inline_ranges = previous_inline_ranges
+    config.setup()
+
+    assert.are.equal(0, inline_count)
+    assert.are.equal(1, inline_ranges_count)
+  end)
+
   local function with_jupynvim_render(opts, assertions)
     opts = opts or {}
     local previous_notebook = package.loaded["jupynvim.notebook"]
@@ -3963,18 +4210,23 @@ end)
 
 describe("render_latex.viewport", function()
   it("computes each window range once when filtering visible equations", function()
-    local previous_win_findbuf = vim.fn.win_findbuf
+    local previous_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
     local previous_win_is_valid = vim.api.nvim_win_is_valid
+    local previous_win_get_config = vim.api.nvim_win_get_config
+    local previous_win_get_buf = vim.api.nvim_win_get_buf
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two", "three" })
-    vim.fn.win_findbuf = function(target)
-      if target == buf then
-        return { 101 }
-      end
-      return {}
+    vim.api.nvim_tabpage_list_wins = function()
+      return { 101 }
     end
     vim.api.nvim_win_is_valid = function(winid)
       return winid == 101
+    end
+    vim.api.nvim_win_get_config = function()
+      return { relative = "" }
+    end
+    vim.api.nvim_win_get_buf = function()
+      return buf
     end
 
     local previous_viewport_range = viewport.viewport_range
@@ -3986,8 +4238,10 @@ describe("render_latex.viewport", function()
 
     local ok, ranges = pcall(viewport.viewport_ranges, buf, {}, 0)
     viewport.viewport_range = previous_viewport_range
-    vim.fn.win_findbuf = previous_win_findbuf
+    vim.api.nvim_tabpage_list_wins = previous_tabpage_list_wins
     vim.api.nvim_win_is_valid = previous_win_is_valid
+    vim.api.nvim_win_get_config = previous_win_get_config
+    vim.api.nvim_win_get_buf = previous_win_get_buf
 
     assert.is_true(ok)
     assert.are.equal(1, calls)
@@ -3996,20 +4250,25 @@ describe("render_latex.viewport", function()
   end)
 
   it("hides equations inside closed folds from visible equation filtering", function()
-    local previous_win_findbuf = vim.fn.win_findbuf
+    local previous_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
     local previous_win_is_valid = vim.api.nvim_win_is_valid
+    local previous_win_get_config = vim.api.nvim_win_get_config
+    local previous_win_get_buf = vim.api.nvim_win_get_buf
     local previous_viewport_range = viewport.viewport_range
     local previous_fold_closed = viewport.fold_closed
     local buf = vim.api.nvim_create_buf(false, true)
 
-    vim.fn.win_findbuf = function(target)
-      if target == buf then
-        return { 101 }
-      end
-      return {}
+    vim.api.nvim_tabpage_list_wins = function()
+      return { 101 }
     end
     vim.api.nvim_win_is_valid = function(winid)
       return winid == 101
+    end
+    vim.api.nvim_win_get_config = function()
+      return { relative = "" }
+    end
+    vim.api.nvim_win_get_buf = function()
+      return buf
     end
     viewport.viewport_range = function()
       return 0, 10
@@ -4023,8 +4282,10 @@ describe("render_latex.viewport", function()
       { start_row = 5, end_row = 6, key = "visible" },
     }, {}, 0)
 
-    vim.fn.win_findbuf = previous_win_findbuf
+    vim.api.nvim_tabpage_list_wins = previous_tabpage_list_wins
     vim.api.nvim_win_is_valid = previous_win_is_valid
+    vim.api.nvim_win_get_config = previous_win_get_config
+    vim.api.nvim_win_get_buf = previous_win_get_buf
     viewport.viewport_range = previous_viewport_range
     viewport.fold_closed = previous_fold_closed
 

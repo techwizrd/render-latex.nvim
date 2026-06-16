@@ -43,6 +43,38 @@ function M.win_is_valid(winid)
   return winid ~= nil and vim.api.nvim_win_is_valid(winid)
 end
 
+---@param winid integer
+function M.win_is_normal(winid)
+  if not M.win_is_valid(winid) then
+    return false
+  end
+  local cfg = vim.api.nvim_win_get_config(winid)
+  return cfg.relative == nil or cfg.relative == ""
+end
+
+---@return integer[]
+function M.current_tab_normal_wins()
+  local wins = {}
+  for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if M.win_is_normal(winid) then
+      wins[#wins + 1] = winid
+    end
+  end
+  return wins
+end
+
+---@param bufnr integer
+---@return integer[]
+function M.current_tab_wins_for_buf(bufnr)
+  local wins = {}
+  for _, winid in ipairs(M.current_tab_normal_wins()) do
+    if vim.api.nvim_win_get_buf(winid) == bufnr then
+      wins[#wins + 1] = winid
+    end
+  end
+  return wins
+end
+
 ---@param value string
 ---@return string
 function M.escape_pattern(value)
