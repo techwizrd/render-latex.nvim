@@ -1,6 +1,7 @@
 local Config = require("render_latex.config")
 local Compat = require("render_latex.compat")
 local Detect = require("render_latex.detect")
+local Util = require("render_latex.util")
 
 local M = {}
 
@@ -326,19 +327,13 @@ function M.render_inline_fallback(bufnr, ns, state, ranges)
   end
   local active = {}
 
-  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-    if vim.api.nvim_win_is_valid(winid) then
-      local cursor = vim.api.nvim_win_get_cursor(winid)
-      local cursor_row = cursor[1] - 1
-      local cursor_col = cursor[2]
-      for index, item in ipairs(items) do
-        if
-          cursor_row == item.row
-          and cursor_col >= item.start_col
-          and cursor_col < item.end_col
-        then
-          active[index] = true
-        end
+  for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
+    local cursor = vim.api.nvim_win_get_cursor(winid)
+    local cursor_row = cursor[1] - 1
+    local cursor_col = cursor[2]
+    for index, item in ipairs(items) do
+      if cursor_row == item.row and cursor_col >= item.start_col and cursor_col < item.end_col then
+        active[index] = true
       end
     end
   end

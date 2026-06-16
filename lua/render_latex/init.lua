@@ -32,15 +32,13 @@ local function register_autocmds()
 
   local function queue_visible_buffers()
     local seen = {}
-    for _, winid in ipairs(vim.api.nvim_list_wins()) do
-      local cfg = vim.api.nvim_win_get_config(winid)
-      if cfg.relative == nil or cfg.relative == "" then
-        local bufnr = vim.api.nvim_win_get_buf(winid)
-        if not seen[bufnr] and should_attach(bufnr) then
-          seen[bufnr] = true
-          Renderer.attach(bufnr)
-          Renderer.queue(bufnr)
-        end
+    local Util = require("render_latex.util")
+    for _, winid in ipairs(Util.current_tab_normal_wins()) do
+      local bufnr = vim.api.nvim_win_get_buf(winid)
+      if not seen[bufnr] and should_attach(bufnr) then
+        seen[bufnr] = true
+        Renderer.attach(bufnr)
+        Renderer.queue(bufnr)
       end
     end
   end
@@ -58,8 +56,6 @@ local function register_autocmds()
   end
 
   vim.api.nvim_create_autocmd({
-    "BufEnter",
-    "BufWinEnter",
     "InsertEnter",
     "InsertLeave",
     "CursorMoved",
@@ -83,12 +79,30 @@ local function register_autocmds()
     end,
   })
 
+  vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "TabEnter", "WinEnter" }, {
+    group = Config.augroup,
+    callback = function(args)
+      local bufnr = args.buf or vim.api.nvim_get_current_buf()
+      if not should_attach(bufnr) then
+        Renderer.detach(bufnr)
+      end
+      update_transient_ui_suppression(true)
+    end,
+  })
+
   vim.api.nvim_create_autocmd("ColorScheme", {
     group = Config.augroup,
     callback = function()
       if update_transient_ui_suppression(false) then
         queue_visible_buffers()
       end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "BufLeave", "TabLeave", "WinLeave" }, {
+    group = Config.augroup,
+    callback = function()
+      Renderer.hide_visible()
     end,
   })
 
@@ -129,12 +143,13 @@ local function register_autocmds()
   vim.api.nvim_create_autocmd("BufWinLeave", {
     group = Config.augroup,
     callback = function(args)
-      Renderer.detach_window(args.buf, vim.api.nvim_get_current_win())
+      Renderer.hide_visible()
+      Renderer.detach_inactive_windows(args.buf)
       update_transient_ui_suppression(false)
     end,
   })
 
-  vim.api.nvim_create_autocmd({ "CmdlineEnter", "CmdlineChanged", "CmdlineLeave", "WinEnter" }, {
+  vim.api.nvim_create_autocmd({ "CmdlineEnter", "CmdlineChanged", "CmdlineLeave" }, {
     group = Config.augroup,
     callback = function()
       update_transient_ui_suppression(true)
@@ -144,6 +159,7 @@ local function register_autocmds()
   vim.api.nvim_create_autocmd("WinClosed", {
     group = Config.augroup,
     callback = function(args)
+      Renderer.hide_visible()
       local winid = tonumber(args.match)
       if winid ~= nil then
         Renderer.detach_winid(winid)

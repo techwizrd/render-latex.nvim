@@ -1,4 +1,5 @@
 local Config = require("render_latex.config")
+local Util = require("render_latex.util")
 
 local M = {}
 
@@ -77,11 +78,9 @@ end
 ---@return { top: integer, bottom: integer }[]
 function M.viewport_ranges(bufnr, viewport_state, prefetch)
   local ranges = {}
-  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-    if vim.api.nvim_win_is_valid(winid) then
-      local top, bottom = M.viewport_range(viewport_state, winid, prefetch)
-      ranges[#ranges + 1] = { top = top, bottom = bottom }
-    end
+  for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
+    local top, bottom = M.viewport_range(viewport_state, winid, prefetch)
+    ranges[#ranges + 1] = { top = top, bottom = bottom }
   end
   return ranges
 end

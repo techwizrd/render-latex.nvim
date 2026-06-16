@@ -444,15 +444,13 @@ end
 local function visible_inline_ranges(bufnr)
   local ranges = {}
   local line_count = vim.api.nvim_buf_line_count(bufnr)
-  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-    if Util.win_is_valid(winid) then
-      local top = math.max(0, vim.fn.line("w0", winid) - 1)
-      local bottom = math.min(line_count - 1, vim.fn.line("w$", winid) - 1)
-      ranges[#ranges + 1] = { start_row = top, end_row = bottom }
-    end
+  for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
+    local top = math.max(0, vim.fn.line("w0", winid) - 1)
+    local bottom = math.min(line_count - 1, vim.fn.line("w$", winid) - 1)
+    ranges[#ranges + 1] = { start_row = top, end_row = bottom }
   end
   if #ranges == 0 then
-    return nil
+    return {}
   end
   return Sources.inline_ranges(bufnr, ranges)
 end
@@ -614,7 +612,7 @@ function M.hide_all()
   end
 end
 
-local function hide_visible()
+function M.hide_visible()
   local backend = ImageBackend.get()
   if backend ~= nil then
     pcall(backend.del, math.huge)
@@ -766,19 +764,17 @@ local function collect_window_snapshot(bufnr, viewport_state, prefetch)
     windows = {},
   }
 
-  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-    if Util.win_is_valid(winid) then
-      local top, bottom = Viewport.viewport_range(viewport_state, winid, prefetch)
-      local text_top, text_bottom = Viewport.visible_text_bounds(winid)
-      snapshot.winids[#snapshot.winids + 1] = winid
-      snapshot.ranges[#snapshot.ranges + 1] = { top = top, bottom = bottom }
-      snapshot.windows[winid] = {
-        width = vim.api.nvim_win_get_width(winid),
-        text_top = text_top,
-        text_bottom = text_bottom,
-        cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1,
-      }
-    end
+  for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
+    local top, bottom = Viewport.viewport_range(viewport_state, winid, prefetch)
+    local text_top, text_bottom = Viewport.visible_text_bounds(winid)
+    snapshot.winids[#snapshot.winids + 1] = winid
+    snapshot.ranges[#snapshot.ranges + 1] = { top = top, bottom = bottom }
+    snapshot.windows[winid] = {
+      width = vim.api.nvim_win_get_width(winid),
+      text_top = text_top,
+      text_bottom = text_bottom,
+      cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1,
+    }
   end
 
   return snapshot
@@ -1395,6 +1391,31 @@ function M.detach_window(bufnr, winid)
   clear_window_images(bufnr, state, winid)
 end
 
+---@param bufnr integer
+function M.detach_inactive_windows(bufnr)
+  local state = buffers[bufnr]
+  if state == nil then
+    return
+  end
+
+  local winids = {}
+  for winid, _ in pairs(state.images) do
+    winids[winid] = true
+  end
+  for winid, _ in pairs(state.focused_keys) do
+    winids[winid] = true
+  end
+  for winid, _ in pairs(state.viewports) do
+    winids[winid] = true
+  end
+
+  for winid, _ in pairs(winids) do
+    if not Util.win_is_valid(winid) or vim.api.nvim_win_get_buf(winid) ~= bufnr then
+      clear_window_images(bufnr, state, winid)
+    end
+  end
+end
+
 ---@param winid integer
 function M.detach_winid(winid)
   for bufnr, state in pairs(buffers) do
@@ -1499,7 +1520,7 @@ function M.set_suppressed(reason, value)
   if suppression.cmdline then
     M.hide_all()
   elseif suppression.floating then
-    hide_visible()
+    M.hide_visible()
   end
 end
 
