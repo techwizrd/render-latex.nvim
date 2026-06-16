@@ -1740,7 +1740,7 @@ describe("render_latex.ui", function()
     assert.is_true(detected)
   end)
 
-  it("detects floating windows independently of cmdline settings", function()
+  it("reports floating window details for diagnostics", function()
     local buf = vim.api.nvim_create_buf(false, true)
     local win = vim.api.nvim_open_win(buf, false, {
       relative = "editor",
@@ -1751,14 +1751,18 @@ describe("render_latex.ui", function()
       style = "minimal",
     })
 
-    local ok, detected = pcall(ui.has_popup_or_floating_windows)
+    local ok, floats = pcall(ui.floating_windows)
     vim.api.nvim_win_close(win, true)
 
     assert.is_true(ok)
-    assert.is_true(detected)
+    assert.are.equal(1, #floats)
+    assert.are.equal(win, floats[1].winid)
+    assert.are.equal("editor", floats[1].relative)
+    assert.are.equal(10, floats[1].width)
+    assert.are.equal(1, floats[1].height)
   end)
 
-  it("ignores non-focusable utility floating windows", function()
+  it("does not suppress image placement for floating windows", function()
     local buf = vim.api.nvim_create_buf(false, true)
     local win = vim.api.nvim_open_win(buf, false, {
       relative = "editor",
@@ -1777,7 +1781,7 @@ describe("render_latex.ui", function()
     assert.is_false(detected)
   end)
 
-  it("ignores command-line UI floats when command-line hiding is disabled", function()
+  it("does not suppress command-line UI when command-line hiding is disabled", function()
     config.setup({ render = { hide_on_cmdline = false } })
     local previous_getcmdtype = vim.fn.getcmdtype
     vim.fn.getcmdtype = function()
@@ -1802,24 +1806,14 @@ describe("render_latex.ui", function()
     assert.is_false(detected)
   end)
 
-  it("detects command-line floats when command-line hiding is enabled", function()
+  it("suppresses command-line UI when command-line hiding is enabled", function()
     config.setup({ render = { hide_on_cmdline = true } })
     local previous_getcmdtype = vim.fn.getcmdtype
     vim.fn.getcmdtype = function()
       return ":"
     end
-    local buf = vim.api.nvim_create_buf(false, true)
-    local win = vim.api.nvim_open_win(buf, false, {
-      relative = "editor",
-      row = 1,
-      col = 1,
-      width = 10,
-      height = 1,
-      style = "minimal",
-    })
 
     local ok, detected = pcall(ui.has_popup_or_floating_windows)
-    vim.api.nvim_win_close(win, true)
     vim.fn.getcmdtype = previous_getcmdtype
     config.setup()
 
@@ -1845,12 +1839,39 @@ describe("render_latex.doctor", function()
     assert.matches("# render%-latex doctor", text)
     assert.matches("image backend status", text)
     assert.matches("hide on cmdline", text)
+    assert.matches("active floating windows", text)
     assert.matches("kitty probing", text)
     assert.matches("tmux passthrough", text)
     assert.matches("## render%-markdown.nvim", text)
     assert.matches("status:", text)
     assert.matches("## obsidian.nvim", text)
     assert.matches("The render loop does not inspect other plugins", text)
+  end)
+
+  it("includes active floating window details", function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    local win = vim.api.nvim_open_win(buf, false, {
+      relative = "editor",
+      row = 2,
+      col = 3,
+      width = 12,
+      height = 4,
+      style = "minimal",
+      focusable = false,
+      zindex = 80,
+    })
+
+    local lines = render_latex.doctor_lines()
+    vim.api.nvim_win_close(win, true)
+    local text = table.concat(lines, "\n")
+
+    assert.matches("active floating windows: 1", text)
+    assert.matches("winid: " .. tostring(win), text)
+    assert.matches("relative: editor", text)
+    assert.matches("focusable: false", text)
+    assert.matches("zindex: 80", text)
+    assert.matches("width: 12", text)
+    assert.matches("height: 4", text)
   end)
 
   it("includes backend availability in tmux diagnostics", function()
