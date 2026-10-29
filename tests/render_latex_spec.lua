@@ -2,6 +2,7 @@
 
 local render_latex = require("render_latex")
 local annotations = require("render_latex.annotations")
+local cell_size = require("render_latex.cell_size")
 local compat = require("render_latex.compat")
 local config = require("render_latex.config")
 local detect = require("render_latex.detect")
@@ -1433,6 +1434,96 @@ describe("render_latex.config", function()
   end)
 end)
 
+describe("render_latex.cell_size", function()
+  local previous_query
+
+  before_each(function()
+    previous_query = cell_size.query
+    cell_size.reset()
+  end)
+
+  after_each(function()
+    cell_size.query = previous_query
+    cell_size.reset()
+    config.setup()
+  end)
+
+  it("divides the terminal pixel size by its grid", function()
+    cell_size.query = function()
+      return { cols = 174, rows = 40, xpixel = 2958, ypixel = 1600 }
+    end
+
+    assert.are.same({ width = 17, height = 40, source = "terminal" }, cell_size.get())
+  end)
+
+  it("falls back to the configured size when the terminal reports no pixels", function()
+    cell_size.query = function()
+      return { cols = 80, rows = 24, xpixel = 0, ypixel = 0 }
+    end
+    assert.are.same({ width = 10, height = 20, source = "fallback" }, cell_size.get())
+
+    cell_size.reset()
+    cell_size.query = function()
+      return nil
+    end
+    assert.are.same({ width = 10, height = 20, source = "fallback" }, cell_size.get())
+  end)
+
+  it("prefers explicit settings over the detected size", function()
+    cell_size.query = function()
+      return { cols = 174, rows = 40, xpixel = 2958, ypixel = 1600 }
+    end
+
+    config.setup({ image = { cell_height_px = 32 } })
+    assert.are.same({ width = 17, height = 32, source = "terminal" }, cell_size.get())
+
+    config.setup({ image = { cell_width_px = 16, cell_height_px = 32 } })
+    assert.are.same({ width = 16, height = 32, source = "config" }, cell_size.get())
+  end)
+
+  it("queries the terminal once until reset", function()
+    local queries = 0
+    cell_size.query = function()
+      queries = queries + 1
+      return { cols = 100, rows = 50, xpixel = 1000, ypixel = 1000 }
+    end
+
+    cell_size.get()
+    cell_size.get()
+    assert.are.equal(1, queries)
+
+    cell_size.reset()
+    cell_size.get()
+    assert.are.equal(2, queries)
+  end)
+
+  it("matches the formula font to the cell height", function()
+    cell_size.query = function()
+      return { cols = 174, rows = 40, xpixel = 2958, ypixel = 1600 }
+    end
+
+    local opts = renderer.resolved_options()
+    assert.are.equal(17, opts.cell_width_px)
+    assert.are.equal(40, opts.cell_height_px)
+    assert.are.equal(34, opts.font_size)
+  end)
+
+  it("reads the size again after the editor resizes", function()
+    local queries = 0
+    cell_size.query = function()
+      queries = queries + 1
+      return { cols = 100, rows = 50, xpixel = 1000, ypixel = 1000 }
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    cell_size.get()
+    vim.api.nvim_exec_autocmds("VimResized", { modeline = false })
+    cell_size.get()
+
+    assert.are.equal(2, queries)
+  end)
+end)
+
 describe("render_latex.install", function()
   local previous_system
   local previous_echo
@@ -2301,6 +2392,7 @@ describe("render_latex.doctor", function()
     assert.matches("active floating windows", text)
     assert.matches("kitty probing", text)
     assert.matches("tmux passthrough", text)
+    assert.matches("cell size: %d+x%d+ px", text)
     assert.matches("## render%-markdown.nvim", text)
     assert.matches("status:", text)
     assert.matches("## obsidian.nvim", text)
@@ -3535,6 +3627,122 @@ describe("render_latex.renderer", function()
     vim.ui.img = previous_img
 
     assert.are.equal(2, request_count)
+  end)
+
+  it("sizes images for the terminal cell size and rerenders when it changes", function()
+    config.setup({ render = { foreground = "#ffffff" } })
+    local previous_img = vim.ui.img
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_detect_scan = detect.scan
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
+    local previous_readblob = vim.fn.readblob
+    local previous_query = cell_size.query
+    local terminal = { cols = 100, rows = 50, xpixel = 1000, ypixel = 1000 }
+    local requests = {}
+    local placements = {}
+
+    local backend = {
+      set = function(_, opts)
+        placements[#placements + 1] = { width = opts.width, height = opts.height }
+        return #placements
+      end,
+      del = function() end,
+      get = function()
+        return nil
+      end,
+    }
+    vim.ui.img = backend
+    image_backend.status = function()
+      return { available = true, name = "nvim" }
+    end
+    image_backend.get = function()
+      return backend, "nvim"
+    end
+    cell_size.query = function()
+      return terminal
+    end
+    cell_size.reset()
+    worker.request_batch = function(items, callback)
+      requests[#requests + 1] = items[1].font_size
+      callback({
+        {
+          error = nil,
+          result = {
+            width_px = 170,
+            height_px = 80,
+            png_path = "/tmp/render-latex-cell-size-test.png",
+            cache_key = "cell-size-test-" .. #requests,
+          },
+        },
+      }, nil)
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+    detect.scan = function()
+      return {
+        {
+          key = "display:1:3",
+          start_row = 0,
+          end_row = 2,
+          text = "x^2",
+          quoted = false,
+        },
+      }
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 40
+    end
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "markdown"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+
+      renderer.set_suppressed("cmdline", false)
+      renderer.set_suppressed("floating", false)
+      renderer.attach(buf)
+      renderer.render(buf)
+      vim.wait(100, function()
+        return #placements == 1
+      end)
+
+      -- The terminal font grows: cells go from 10x20 to 17x40 pixels.
+      terminal = { cols = 100, rows = 50, xpixel = 1700, ypixel = 2000 }
+      cell_size.reset()
+      renderer.render(buf)
+      vim.wait(100, function()
+        return #placements == 2
+      end)
+      renderer.clear(buf)
+    end)
+
+    cell_size.query = previous_query
+    cell_size.reset()
+    worker.request_batch = previous_request_batch
+    detect.scan = previous_detect_scan
+    viewport.viewport_range = previous_viewport_range
+    viewport.visible_text_bounds = previous_visible_text_bounds
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    vim.fn.readblob = previous_readblob
+    vim.ui.img = previous_img
+    config.setup()
+    if not ok then
+      error(err)
+    end
+
+    assert.are.same({ 17, 34 }, requests)
+    assert.are.same({ width = 17, height = 4 }, placements[1])
+    assert.are.same({ width = 10, height = 2 }, placements[2])
   end)
 
   it("uses jupynvim cell margins and suppresses default labels", function()

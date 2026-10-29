@@ -177,7 +177,20 @@ local function register_autocmds()
 
   vim.api.nvim_create_autocmd({ "FocusGained", "VimResume" }, {
     group = Config.augroup,
+    callback = function(args)
+      if args.event == "VimResume" then
+        require("render_latex.cell_size").reset()
+      end
+      update_transient_ui_suppression(true)
+    end,
+  })
+
+  -- A terminal font size change resizes the grid; re-read the cell size so images are
+  -- rendered for it. Equations whose render options change are rendered again.
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = Config.augroup,
     callback = function()
+      require("render_latex.cell_size").reset()
       update_transient_ui_suppression(true)
     end,
   })
@@ -327,6 +340,11 @@ function M.doctor_lines()
       .. tostring(render.foreground_source)
       .. ")",
     "font size: " .. tostring(render.font_size),
+    ("cell size: %sx%s px (%s)"):format(
+      render.cell_width_px,
+      render.cell_height_px,
+      require("render_latex.cell_size").get().source
+    ),
     "hide on cmdline: " .. tostring(Config.render.hide_on_cmdline),
     "conceallevel: " .. tostring(vim.wo.conceallevel),
     "concealcursor: " .. tostring(vim.wo.concealcursor),

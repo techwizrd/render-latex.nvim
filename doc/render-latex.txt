@@ -271,12 +271,16 @@ Image options:
 `image.zindex`           Z-index for image placement. Default: `60`.
 
                                           *render-latex-image.cell_width_px*
-`image.cell_width_px`    Fallback terminal cell width in pixels for Kitty
-                         placement. Default: `10`.
+`image.cell_width_px`    Terminal cell width in pixels, used to size images and,
+                         with `render.match_text_size`, the formula font. By
+                         default it is read from the terminal and this value is
+                         the fallback when the terminal reports no pixel size.
+                         Setting it overrides the detected width. Default: `10`.
 
                                          *render-latex-image.cell_height_px*
-`image.cell_height_px`   Fallback terminal cell height in pixels for Kitty
-                         placement. Default: `20`.
+`image.cell_height_px`   Terminal cell height in pixels. Detected like
+                         `image.cell_width_px`; setting it overrides the
+                         detected height. Default: `20`.
 
 Tmux options:
 

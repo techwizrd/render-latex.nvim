@@ -1,3 +1,4 @@
+local CellSize = require("render_latex.cell_size")
 local Config = require("render_latex.config")
 local Annotations = require("render_latex.annotations")
 local Detect = require("render_latex.detect")
@@ -185,12 +186,13 @@ local function resolve_font_size()
     return Config.render.font_size
   end
 
-  local base = Config.image.cell_height_px * TEXT_SIZE_CALIBRATION
+  local base = CellSize.get().height * TEXT_SIZE_CALIBRATION
   return math.max(1, base * (preset_scale[Config.render.preset] or 1.0) * Config.render.text_scale)
 end
 
 local function resolved_render_options(equation)
   local foreground, source = resolve_foreground(equation)
+  local cell = CellSize.get()
   return {
     foreground = foreground,
     foreground_source = source,
@@ -198,8 +200,8 @@ local function resolved_render_options(equation)
     scale = Config.render.scale,
     background = Config.render.background,
     padding = Config.render.padding,
-    cell_width_px = Config.image.cell_width_px,
-    cell_height_px = Config.image.cell_height_px,
+    cell_width_px = cell.width,
+    cell_height_px = cell.height,
   }
 end
 
@@ -1072,6 +1074,7 @@ local function request_renders(bufnr, equations_to_render)
   local pending_equations = {}
   local content_hashes = {}
   local render_fingerprints = {}
+  local request_options = {}
   local option_cache = {}
 
   for _, equation in ipairs(equations_to_render) do
@@ -1092,6 +1095,7 @@ local function request_renders(bufnr, equations_to_render)
         pending_equations[#pending_equations + 1] = equation
         content_hashes[equation.key] = content_hash
         render_fingerprints[equation.key] = fingerprint
+        request_options[equation.key] = opts
         items[#items + 1] = render_payload(equation, opts)
       end
     end
@@ -1127,9 +1131,10 @@ local function request_renders(bufnr, equations_to_render)
       state.pending[equation.key] = nil
       local item = results[index]
       if item ~= nil and item.error == nil and item.result ~= nil then
-        item.result.width_cells = Util.round_up(item.result.width_px / Config.image.cell_width_px)
-        item.result.height_cells =
-          Util.round_up(item.result.height_px / Config.image.cell_height_px)
+        -- Size the image in cells with the cell size it was rendered for.
+        local opts = request_options[equation.key]
+        item.result.width_cells = Util.round_up(item.result.width_px / opts.cell_width_px)
+        item.result.height_cells = Util.round_up(item.result.height_px / opts.cell_height_px)
         item.result.render_fingerprint = render_fingerprints[equation.key]
         item.result.content_hash = content_hashes[equation.key]
         state.metadata[equation.key] = item.result
