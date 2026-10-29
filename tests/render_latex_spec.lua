@@ -12,6 +12,7 @@ local renderer = require("render_latex.renderer")
 local sources = require("render_latex.sources")
 local tmux = require("render_latex.tmux")
 local ui = require("render_latex.ui")
+local unicode = require("render_latex.unicode")
 local util = require("render_latex.util")
 local viewport = require("render_latex.viewport")
 local worker = require("render_latex.worker")
@@ -1062,6 +1063,114 @@ describe("render_latex.integrations.jupynvim", function()
   end)
 end)
 
+describe("render_latex.unicode", function()
+  local function rendered(text)
+    local out = {}
+    local index = 1
+    for _, range in ipairs(unicode.replacements(text)) do
+      out[#out + 1] = text:sub(index, range.start_col - 1) .. range.replacement
+      index = range.end_col + 1
+    end
+    out[#out + 1] = text:sub(index)
+    return table.concat(out)
+  end
+
+  it("converts common inline math to Unicode", function()
+    local cases = {
+      [[e^{i\pi} + 1 = 0]],
+      "e^(iπ) + 1 = 0",
+      [[x_{i,j}^{2}]],
+      "xᵢ,ⱼ²",
+      [[2^{n+1} - 1]],
+      "2ⁿ⁺¹ - 1",
+      [[d_{pivot}]],
+      "dₚᵢᵥₒₜ",
+      [[s_{t_i}]],
+      "sₜᵢ",
+      [[\sum_{i=1}^{n} x_i]],
+      "∑ᵢ₌₁ⁿ xᵢ",
+      [[\mathbb{R}^n]],
+      "ℝⁿ",
+      [[\mathcal{O}(n \log n)]],
+      "𝒪(n log n)",
+      [[\mathbf{1}^\top]],
+      "𝟏ᵀ",
+      [[\hat{\theta} \cdot \vec v]],
+      "θ̂ · v⃗",
+      [[\bar E]],
+      "E\u{0304}",
+      [[\sqrt{d_k}]],
+      "√dₖ",
+      [[\sqrt[3]{x+1}]],
+      "∛(x+1)",
+      [[\frac12 + \frac{3}{4}]],
+      "½ + ¾",
+      [[= \frac{a+b}{2c}]],
+      "= (a+b)/2c",
+      [[\frac{1}{T}\sum_i]],
+      "(1/T)∑ᵢ",
+      [[\log\frac{N+1}{df}]],
+      "log((N+1)/df)",
+      [[\left( \frac{1}{n} \right)]],
+      "( 1/n )",
+      [[\not= \not\in \not\subset]],
+      "≠ ∉ ⊄",
+      [[\|x\|_2]],
+      "‖x‖₂",
+      [[f''(x)]],
+      "f″(x)",
+      [[O(T\log T)]],
+      "O(T log T)",
+      [[a \bmod b]],
+      "a mod b",
+      [[\text{if } x > 0]],
+      "if  x > 0",
+      [[\binom{n}{k}]],
+      "C(n,k)",
+      [[\overset{def}{=}]],
+      "≝",
+      [[\lim_{x \to 0}]],
+      "lim_(x → 0)",
+      [[\lfloor x \rfloor \le \lceil x \rceil]],
+      "⌊ x ⌋ ≤ ⌈ x ⌉",
+      [[0.69\,N/n]],
+      "0.69 N/n",
+    }
+    for index = 1, #cases, 2 do
+      assert.are.equal(cases[index + 1], unicode.convert(cases[index]))
+      assert.are.equal(cases[index + 1], rendered(cases[index]))
+    end
+  end)
+
+  it("keeps unknown commands and their arguments as written", function()
+    assert.are.equal([[\unknown{x} + y]], unicode.convert([[\unknown{x} + y]]))
+    assert.are.same({}, unicode.replacements([[\unknown{x}]]))
+  end)
+
+  it("fits each replacement into its source range", function()
+    local text = [[\frac{1}{T}\sum_{i=1}^{n} \hat q_i \in \mathbb{R}^{d}, e^{i\pi}]]
+    for _, range in ipairs(unicode.replacements(text)) do
+      local source = text:sub(range.start_col, range.end_col)
+      assert.is_true(#unicode.graphemes(range.replacement) <= #unicode.char_starts(source))
+    end
+  end)
+
+  it("keeps symbols inside unconvertible scripts on their own source range", function()
+    local text = [[e^{i\pi}]]
+    local pi = nil
+    for _, range in ipairs(unicode.replacements(text)) do
+      if range.replacement == "π" then
+        pi = text:sub(range.start_col, range.end_col)
+      end
+    end
+    assert.are.equal([[\pi]], pi)
+  end)
+
+  it("leaves tokens whose Unicode form is longer than their source", function()
+    assert.are.same({}, unicode.replacements([[\pmod1]]))
+  end)
+end)
+
 describe("render_latex.annotations", function()
   it("conceals inline math delimiters by default", function()
     config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
@@ -1135,6 +1244,67 @@ describe("render_latex.annotations", function()
     )
     assert.is_true(conceals[""])
     assert.is_true(conceals["∈"])
+  end)
+
+  it("renders multi-character inline math replacements with one character per mark", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local line = [[MAP $= \frac{1}{T}\sum_i \hat q_i$ end]]
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line, "" })
+    local ns = vim.api.nvim_create_namespace("render-latex-test-unicode-marks")
+    local state = { inline_marks = {} }
+
+    annotations.render_inline_fallback(buf, ns, state)
+    local conceals = {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+      if mark[4].conceal ~= nil then
+        assert.is_true(#unicode.graphemes(mark[4].conceal) <= 1)
+        conceals[#conceals + 1] = { mark[3], mark[4].end_col, mark[4].conceal }
+      end
+    end
+    table.sort(conceals, function(a, b)
+      return a[1] < b[1]
+    end)
+
+    -- Apply the conceal marks the way Neovim draws them.
+    local out = {}
+    local col = 0
+    for _, conceal in ipairs(conceals) do
+      assert.is_true(conceal[1] >= col)
+      out[#out + 1] = line:sub(col + 1, conceal[1])
+      out[#out + 1] = conceal[3]
+      col = conceal[2]
+    end
+    out[#out + 1] = line:sub(col + 1)
+
+    assert.are.equal("MAP = (1/T)∑ᵢ q̂ᵢ end", table.concat(out))
+  end)
+
+  it("pads multi-character inline math replacements inside markdown tables", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    local raw_row = [[| row | $\frac{a}{b}$ |]]
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "| Item | Math |",
+      "| --- | --- |",
+      raw_row,
+    })
+    local ns = vim.api.nvim_create_namespace("render-latex-test-unicode-table-padding")
+    local state = { inline_marks = {} }
+
+    annotations.render_inline_fallback(buf, ns, state)
+    local padding = nil
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+      if mark[4].virt_text_pos == "inline" then
+        padding = mark
+      end
+    end
+
+    assert.is_truthy(padding)
+    assert.are.equal(
+      vim.fn.strdisplaywidth(raw_row),
+      vim.fn.strdisplaywidth("| row | a/b" .. padding[4].virt_text[1][1] .. " |")
+    )
   end)
 
   it("respects disabled inline symbols when padding table math", function()

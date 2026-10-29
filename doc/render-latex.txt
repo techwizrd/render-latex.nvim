@@ -249,8 +249,13 @@ Render options:
                          `"highlight"`, or `false`. Default: `"conceal"`.
 
                                          *render-latex-render.inline_symbols*
-`render.inline_symbols`  Replace common inline LaTeX commands with readable
-                         symbols in conceal mode. Default: `true`.
+`render.inline_symbols`  Show inline math as Unicode text in conceal mode:
+                         symbols, Greek letters, sub- and superscripts,
+                         `\mathbb` and other math alphabets, accents, roots,
+                         and fractions written as `a/b`. Characters without a
+                         Unicode script form keep the `^` or `_`, as in
+                         `x_(max)`. Commands it does not know stay as written.
+                         Default: `true`.
 
                                           *render-latex-render.live_preview*
 `render.live_preview`   While editing a focused display equation, keep the raw

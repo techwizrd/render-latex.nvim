@@ -57,7 +57,7 @@ The plugin sets itself up with useful defaults and installs the matching prebuil
 
 - Renders Markdown display math blocks like `$$ ... $$` and `\[ ... \]` as transparent PNG images.
 - Keeps the buffer editable: raw LaTeX stays in the file, and the image is only the rendered view.
-- Handles inline math like `$x^2$` with a fast conceal/highlight fallback instead of image flicker.
+- Handles inline math like `$x^2$` with a fast conceal/highlight fallback instead of image flicker, writing it as Unicode text such as `∑ᵢ₌₁ⁿ xᵢ`, `ℝⁿ`, `θ̂`, and `(a+b)/2`.
 - Uses a persistent Rust worker that starts once, batches visible equations, and keeps a warm cache and directional prefetching.
 - Installs the matching prebuilt worker automatically on common platforms, with a manual source-build path when needed.
 - Chooses a safe image backend for Neovim image support or Kitty graphics, including tmux passthrough.

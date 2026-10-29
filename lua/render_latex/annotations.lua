@@ -1,165 +1,10 @@
 local Config = require("render_latex.config")
 local Compat = require("render_latex.compat")
 local Detect = require("render_latex.detect")
+local Unicode = require("render_latex.unicode")
 local Util = require("render_latex.util")
 
 local M = {}
-
-local inline_symbols = {
-  alpha = "α",
-  beta = "β",
-  gamma = "γ",
-  delta = "δ",
-  epsilon = "ϵ",
-  theta = "θ",
-  lambda = "λ",
-  mu = "μ",
-  nu = "ν",
-  xi = "ξ",
-  pi = "π",
-  rho = "ρ",
-  sigma = "σ",
-  tau = "τ",
-  varphi = "φ",
-  phi = "ϕ",
-  psi = "ψ",
-  omega = "ω",
-  Gamma = "Γ",
-  Delta = "Δ",
-  Theta = "Θ",
-  Lambda = "Λ",
-  Pi = "Π",
-  Sigma = "Σ",
-  Phi = "Φ",
-  Psi = "Ψ",
-  Omega = "Ω",
-  div = "÷",
-  times = "×",
-  cdot = "·",
-  pm = "±",
-  mp = "∓",
-  oplus = "⊕",
-  otimes = "⊗",
-  cap = "∩",
-  cup = "∪",
-  wedge = "∧",
-  vee = "∨",
-  setminus = "∖",
-  equiv = "≡",
-  ne = "≠",
-  neq = "≠",
-  le = "≤",
-  leq = "≤",
-  ge = "≥",
-  geq = "≥",
-  approx = "≈",
-  sim = "∼",
-  simeq = "≃",
-  cong = "≅",
-  propto = "∝",
-  subset = "⊂",
-  subseteq = "⊆",
-  supset = "⊃",
-  supseteq = "⊇",
-  nsubseteq = "⊈",
-  nsupseteq = "⊉",
-  ["in"] = "∈",
-  notin = "∉",
-  ni = "∋",
-  emptyset = "∅",
-  varnothing = "∅",
-  forall = "∀",
-  exists = "∃",
-  nexists = "∄",
-  neg = "¬",
-  land = "∧",
-  lor = "∨",
-  implies = "⇒",
-  iff = "⇔",
-  infty = "∞",
-  to = "→",
-  rightarrow = "→",
-  leftarrow = "←",
-  leftrightarrow = "↔",
-  Rightarrow = "⇒",
-  Leftarrow = "⇐",
-  Leftrightarrow = "⇔",
-  mapsto = "↦",
-  longrightarrow = "⟶",
-  longleftarrow = "⟵",
-  longleftrightarrow = "⟷",
-  sum = "∑",
-  prod = "∏",
-  int = "∫",
-  oint = "∮",
-  partial = "∂",
-  nabla = "∇",
-  angle = "∠",
-  degree = "°",
-  prime = "′",
-  perp = "⊥",
-  parallel = "∥",
-  aleph = "ℵ",
-  hbar = "ℏ",
-  ell = "ℓ",
-  Re = "ℜ",
-  Im = "ℑ",
-}
-
-local superscripts = {
-  ["0"] = "⁰",
-  ["1"] = "¹",
-  ["2"] = "²",
-  ["3"] = "³",
-  ["4"] = "⁴",
-  ["5"] = "⁵",
-  ["6"] = "⁶",
-  ["7"] = "⁷",
-  ["8"] = "⁸",
-  ["9"] = "⁹",
-  ["+"] = "⁺",
-  ["-"] = "⁻",
-  ["="] = "⁼",
-  ["("] = "⁽",
-  [")"] = "⁾",
-  n = "ⁿ",
-  i = "ⁱ",
-}
-
-local subscripts = {
-  ["0"] = "₀",
-  ["1"] = "₁",
-  ["2"] = "₂",
-  ["3"] = "₃",
-  ["4"] = "₄",
-  ["5"] = "₅",
-  ["6"] = "₆",
-  ["7"] = "₇",
-  ["8"] = "₈",
-  ["9"] = "₉",
-  ["+"] = "₊",
-  ["-"] = "₋",
-  ["="] = "₌",
-  ["("] = "₍",
-  [")"] = "₎",
-  a = "ₐ",
-  e = "ₑ",
-  h = "ₕ",
-  i = "ᵢ",
-  j = "ⱼ",
-  k = "ₖ",
-  l = "ₗ",
-  m = "ₘ",
-  n = "ₙ",
-  o = "ₒ",
-  p = "ₚ",
-  r = "ᵣ",
-  s = "ₛ",
-  t = "ₜ",
-  u = "ᵤ",
-  v = "ᵥ",
-  x = "ₓ",
-}
 
 local function set_inline_conceal(bufnr, ns, state, row, start_col, end_col, replacement)
   state.inline_marks[#state.inline_marks + 1] =
@@ -171,67 +16,33 @@ local function set_inline_conceal(bufnr, ns, state, row, start_col, end_col, rep
     })
 end
 
-local function inline_symbol_replacements(item)
-  local replacements = {}
-  local text = item.text
-  local index = 1
-  while index <= #text do
-    local command_start, command_end, name = text:find("\\([A-Za-z]+)", index)
-    local script_start, script_end, marker, value = text:find("([%^_])([%w%+%-%=%(%)])", index)
-    local braced_start, braced_end, braced_marker, braced_value =
-      text:find("([%^_])%{([%w%+%-%=%(%)])%}", index)
-
-    if braced_start ~= nil and (script_start == nil or braced_start < script_start) then
-      script_start = braced_start
-      script_end = braced_end
-      marker = braced_marker
-      value = braced_value
-    end
-
-    if command_start == nil and script_start == nil then
-      break
-    end
-
-    if script_start ~= nil and (command_start == nil or script_start < command_start) then
-      local replacement = marker == "^" and superscripts[value] or subscripts[value]
-      if replacement ~= nil then
-        replacements[#replacements + 1] = {
-          start_col = script_start,
-          end_col = script_end,
-          replacement = replacement,
-        }
-      end
-      index = script_end + 1
-    else
-      local replacement = inline_symbols[name]
-      if replacement ~= nil then
-        replacements[#replacements + 1] = {
-          start_col = command_start,
-          end_col = command_end,
-          replacement = replacement,
-        }
-      end
-      index = command_end + 1
-    end
-  end
-  return replacements
-end
-
 local function set_inline_symbol_marks(bufnr, ns, state, item, replacements)
   if not Config.render.inline_symbols then
     return
   end
 
+  -- A conceal mark shows at most one character, so each output character conceals one source
+  -- character and the last one also conceals the rest of the token.
   for _, range in ipairs(replacements) do
-    set_inline_conceal(
-      bufnr,
-      ns,
-      state,
-      item.row,
-      item.content_start_col + range.start_col - 1,
-      item.content_start_col + range.end_col,
-      range.replacement
-    )
+    local source = item.text:sub(range.start_col, range.end_col)
+    local starts = Unicode.char_starts(source)
+    local graphemes = Unicode.graphemes(range.replacement)
+    local base = item.content_start_col + range.start_col - 2
+    if #graphemes == 0 then
+      set_inline_conceal(bufnr, ns, state, item.row, base + 1, base + #source + 1, "")
+    end
+    for index, grapheme in ipairs(graphemes) do
+      local next_start = index < #graphemes and starts[index + 1] or #source + 1
+      set_inline_conceal(
+        bufnr,
+        ns,
+        state,
+        item.row,
+        base + starts[index],
+        base + next_start,
+        grapheme
+      )
+    end
   end
 end
 
@@ -375,7 +186,7 @@ function M.render_inline_fallback(bufnr, ns, state, ranges)
       })
 
     if not reveal then
-      local replacements = Config.render.inline_symbols and inline_symbol_replacements(item) or {}
+      local replacements = Config.render.inline_symbols and Unicode.replacements(item.text) or {}
       set_inline_symbol_marks(bufnr, ns, state, item, replacements)
       if mode == "conceal" then
         set_inline_table_padding(bufnr, ns, state, item, replacements)
