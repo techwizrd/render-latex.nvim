@@ -242,7 +242,8 @@ Render options:
 `render.padding`         Padding around rendered equations. Default: `10`.
 
                                                  *render-latex-render.scale*
-`render.scale`           Render scale sent to the worker. Default: `1.5`.
+`render.scale`           Device pixels per image pixel. Higher values render
+                         sharper images at the same size. Default: `1.5`.
 
                                                 *render-latex-render.inline*
 `render.inline`          Inline math fallback mode: `"conceal"`, `"content"`,

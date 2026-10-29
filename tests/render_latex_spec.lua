@@ -3537,6 +3537,17 @@ describe("render_latex.renderer", function()
     assert.are.equal(2, request_count)
   end)
 
+  it("sizes images in cells by their unscaled pixel size", function()
+    with_jupynvim_render({
+      width_px = 300,
+      height_px = 120,
+      config = { image = { cell_width_px = 10, cell_height_px = 20 }, render = { scale = 1.5 } },
+    }, function(_, captured_opts)
+      assert.are.equal(20, captured_opts.width)
+      assert.are.equal(4, captured_opts.height)
+    end)
+  end)
+
   it("uses jupynvim cell margins and suppresses default labels", function()
     with_jupynvim_render({}, function(buf, captured_opts)
       assert.is_truthy(captured_opts)

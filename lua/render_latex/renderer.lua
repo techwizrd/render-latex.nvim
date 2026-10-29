@@ -1127,9 +1127,13 @@ local function request_renders(bufnr, equations_to_render)
       state.pending[equation.key] = nil
       local item = results[index]
       if item ~= nil and item.error == nil and item.result ~= nil then
-        item.result.width_cells = Util.round_up(item.result.width_px / Config.image.cell_width_px)
+        -- The worker renders at `render.scale` device pixels per pixel, so the image
+        -- covers the cells of its unscaled size and the terminal shrinks it to fit.
+        local scale = Config.render.scale
+        item.result.width_cells =
+          Util.round_up(item.result.width_px / scale / Config.image.cell_width_px)
         item.result.height_cells =
-          Util.round_up(item.result.height_px / Config.image.cell_height_px)
+          Util.round_up(item.result.height_px / scale / Config.image.cell_height_px)
         item.result.render_fingerprint = render_fingerprints[equation.key]
         item.result.content_hash = content_hashes[equation.key]
         state.metadata[equation.key] = item.result
