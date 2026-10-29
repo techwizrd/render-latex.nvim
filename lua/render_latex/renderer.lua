@@ -56,6 +56,7 @@ end
 ---@field scanned boolean
 ---@field attached boolean
 ---@field inline_marks integer[]
+---@field inline_coverage table<integer, { top: integer, bottom: integer }>?
 ---@field manual_raw table<string, boolean>
 ---@field exit_timers table<string, any>
 ---@field delayed_render table<string, boolean>
@@ -109,6 +110,7 @@ local function get_buffer_state(bufnr)
     scanned = false,
     attached = false,
     inline_marks = {},
+    inline_coverage = nil,
     manual_raw = {},
     exit_timers = {},
     delayed_render = {},
@@ -441,18 +443,50 @@ equations = function(bufnr)
   return state.equations
 end
 
-local function visible_inline_ranges(bufnr)
+---@param winid integer
+---@return integer top
+---@return integer bottom
+local function window_rows(winid)
+  return vim.fn.line("w0", winid) - 1, vim.fn.line("w$", winid) - 1
+end
+
+-- Inline math covers the visible lines and `prefetch` lines on either side, so lines
+-- that scroll into view are already concealed instead of changing a moment later.
+---@param bufnr integer
+---@param state render_latex.BufferState
+---@param prefetch integer
+local function render_inline(bufnr, state, prefetch)
   local ranges = {}
+  local coverage = {}
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
-    local top = math.max(0, vim.fn.line("w0", winid) - 1)
-    local bottom = math.min(line_count - 1, vim.fn.line("w$", winid) - 1)
+    local top, bottom = window_rows(winid)
+    top = math.max(0, top - prefetch)
+    bottom = math.min(line_count - 1, bottom + prefetch)
     ranges[#ranges + 1] = { start_row = top, end_row = bottom }
+    coverage[winid] = { top = top, bottom = bottom }
   end
-  if #ranges == 0 then
-    return {}
+  state.inline_coverage = coverage
+  local inline_ranges = #ranges == 0 and {} or Sources.inline_ranges(bufnr, ranges)
+  Annotations.render_inline_fallback(bufnr, Config.ns, state, inline_ranges)
+end
+
+---@param bufnr integer
+---@param state render_latex.BufferState
+---@return boolean
+local function inline_covers_windows(bufnr, state)
+  local coverage = state.inline_coverage
+  if coverage == nil then
+    return false
   end
-  return Sources.inline_ranges(bufnr, ranges)
+  for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
+    local covered = coverage[winid]
+    local top, bottom = window_rows(winid)
+    if covered == nil or top < covered.top or bottom > covered.bottom then
+      return false
+    end
+  end
+  return true
 end
 
 local function failure_matches(failure, content_hash, render_fingerprint)
@@ -1180,7 +1214,7 @@ function M.render(bufnr)
   local state = get_buffer_state(bufnr)
   local indexed_equations = equations(bufnr)
   prune_stale_state(state, indexed_equations)
-  Annotations.render_inline_fallback(bufnr, Config.ns, state, visible_inline_ranges(bufnr))
+  render_inline(bufnr, state, limits.prefetch)
   local snapshot = collect_window_snapshot(bufnr, state.viewports, limits.prefetch)
   local focused_keys = sync_focus(bufnr, indexed_equations, snapshot)
   local active = {}
@@ -1295,6 +1329,9 @@ function M.refresh_visible(bufnr)
   local snapshot = collect_window_snapshot(bufnr, state.viewports, limits.prefetch)
   if #snapshot.winids == 0 then
     return
+  end
+  if not inline_covers_windows(bufnr, state) then
+    render_inline(bufnr, state, limits.prefetch)
   end
 
   if update_existing_visible(bufnr, indexed_equations, snapshot) then

@@ -3162,6 +3162,59 @@ describe("render_latex.worker", function()
 end)
 
 describe("render_latex.renderer", function()
+  it("prefetches inline math and refreshes it when scrolling past the prefetched lines", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode }, prefetch_lines = 10 })
+    local previous_inline_ranges = detect.inline_ranges
+    local scanned = {}
+    detect.inline_ranges = function(_, ranges)
+      scanned[#scanned + 1] = ranges
+      return {}
+    end
+
+    local lines = {}
+    for i = 1, 200 do
+      lines[i] = ("line $x_{%d}$"):format(i)
+    end
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    local winid = vim.api.nvim_get_current_win()
+
+    local function view_rows()
+      return vim.fn.line("w0", winid) - 1, vim.fn.line("w$", winid) - 1
+    end
+    local function scroll_to(topline)
+      vim.api.nvim_win_call(winid, function()
+        vim.fn.winrestview({ topline = topline, lnum = topline })
+      end)
+    end
+
+    local ok, err = pcall(function()
+      scroll_to(50)
+      renderer.render(buf)
+      local top, bottom = view_rows()
+      assert.are.equal(1, #scanned)
+      assert.are.same({ { start_row = top - 10, end_row = bottom + 10 } }, scanned[1])
+
+      scroll_to(55)
+      renderer.refresh_visible(buf)
+      assert.are.equal(1, #scanned)
+
+      scroll_to(150)
+      renderer.refresh_visible(buf)
+      top, bottom = view_rows()
+      assert.are.equal(2, #scanned)
+      assert.are.same({ { start_row = top - 10, end_row = bottom + 10 } }, scanned[2])
+    end)
+
+    detect.inline_ranges = previous_inline_ranges
+    renderer.clear(buf)
+    vim.api.nvim_buf_delete(buf, { force = true })
+    config.setup()
+    assert(ok, err)
+  end)
+
   it("does not run whole-buffer inline fallback for inactive-tab buffers", function()
     config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
     local previous_inline = detect.inline

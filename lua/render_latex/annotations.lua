@@ -397,6 +397,7 @@ function M.clear_marks(bufnr, ns, state)
     pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, mark_id)
   end
   state.inline_marks = {}
+  state.inline_coverage = nil
 
   for _, mark_id in pairs(state.labels) do
     pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, mark_id)

@@ -8,6 +8,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Fixed
 
+- Concealed inline math in the prefetched lines around the viewport and refreshed it as soon as scrolling passes them, so lines no longer show raw LaTeX and reflow just after scrolling into view.
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
 
 ## 0.1.0-rc5 - 2026-10-17
