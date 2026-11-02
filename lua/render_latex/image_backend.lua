@@ -91,8 +91,11 @@ local function tmux_passthrough_enabled()
 end
 
 -- Over SSH, the environment inside tmux doesn't name the terminal tmux is attached to,
--- but tmux keeps the XTVERSION reply of the attached client. WezTerm is left out: it
+-- but tmux keeps the XTVERSION reply of the attached client, and for control-mode
+-- clients, which don't answer it, the TERM they started with. WezTerm is left out: it
 -- lacks Unicode placeholders, and inside tmux its TERM_PROGRAM can't turn them off.
+local KITTY_TERMNAMES = { ["xterm-kitty"] = true, ["xterm-ghostty"] = true }
+
 local function tmux_client_kitty()
   if not is_tmux() or vim.fn.executable("tmux") ~= 1 then
     return false
@@ -103,9 +106,11 @@ local function tmux_client_kitty()
     return tmux_client.value
   end
 
-  local termtype = (require("render_latex.tmux").client_termtype() or ""):lower()
+  local client = require("render_latex.tmux").client_terminal() or {}
+  local termtype = (client.termtype or ""):lower()
   tmux_client.value = termtype:find("kitty", 1, true) ~= nil
     or termtype:find("ghostty", 1, true) ~= nil
+    or KITTY_TERMNAMES[client.termname] == true
   tmux_client.checked_at = now
   return tmux_client.value
 end

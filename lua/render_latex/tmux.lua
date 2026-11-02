@@ -21,12 +21,17 @@ function M.option(name)
   return result.code == 0 and vim.trim(result.stdout or "") or nil
 end
 
---- The attached client's terminal as it answered XTVERSION, such as "ghostty 1.2.0".
---- Empty when the terminal didn't answer, nil when tmux can't be asked.
----@return string?
-function M.client_termtype()
-  local result = run_tmux({ "display-message", "-p", "#{client_termtype}" })
-  return result.code == 0 and vim.trim(result.stdout or "") or nil
+--- The attached client's terminal: its XTVERSION answer, such as "ghostty 1.2.0", and
+--- the TERM it was started with. The answer is empty when the terminal didn't give one,
+--- as with control-mode clients (`tmux -CC`). Nil when tmux can't be asked.
+---@return { termtype: string, termname: string }?
+function M.client_terminal()
+  local result = run_tmux({ "display-message", "-p", "#{client_termtype}\t#{client_termname}" })
+  if result.code ~= 0 then
+    return nil
+  end
+  local termtype, termname = (result.stdout or ""):gsub("\n$", ""):match("^(.-)\t(.*)$")
+  return { termtype = vim.trim(termtype or ""), termname = vim.trim(termname or "") }
 end
 
 ---@param global boolean

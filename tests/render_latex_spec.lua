@@ -2533,12 +2533,12 @@ describe("render_latex.image_backend", function()
   local previous_img
   local previous_executable
   local previous_tmux_option
-  local previous_tmux_client_termtype
+  local previous_tmux_client_terminal
 
   before_each(function()
-    previous_tmux_client_termtype = tmux.client_termtype
-    tmux.client_termtype = function()
-      return ""
+    previous_tmux_client_terminal = tmux.client_terminal
+    tmux.client_terminal = function()
+      return { termtype = "", termname = "xterm-256color" }
     end
     previous_kitty = vim.env.KITTY_WINDOW_ID
     previous_wezterm = vim.env.WEZTERM_EXECUTABLE
@@ -2567,7 +2567,7 @@ describe("render_latex.image_backend", function()
     vim.ui.img = previous_img
     vim.fn.executable = previous_executable
     tmux.option = previous_tmux_option
-    tmux.client_termtype = previous_tmux_client_termtype
+    tmux.client_terminal = previous_tmux_client_terminal
     image_backend.reset_for_tests()
     config.setup()
   end)
@@ -2643,10 +2643,17 @@ describe("render_latex.image_backend", function()
       return "on"
     end
 
-    for _, termtype in ipairs({ "ghostty 1.2.0", "kitty(0.42.1)" }) do
+    -- The XTVERSION answer, or the TERM of a control-mode client that gave none
+    local kitty_clients = {
+      { termtype = "ghostty 1.2.0", termname = "xterm-256color" },
+      { termtype = "kitty(0.42.1)", termname = "xterm-256color" },
+      { termtype = "", termname = "xterm-ghostty" },
+      { termtype = "", termname = "xterm-kitty" },
+    }
+    for _, client in ipairs(kitty_clients) do
       image_backend.reset_for_tests()
-      tmux.client_termtype = function()
-        return termtype
+      tmux.client_terminal = function()
+        return client
       end
       local backend, name, reason = image_backend.get()
       assert.is_truthy(backend)
@@ -2655,15 +2662,44 @@ describe("render_latex.image_backend", function()
     end
 
     -- The third run stands for a tmux that can't be asked.
+    local other_clients = {
+      { termtype = "WezTerm 20240203", termname = "xterm-256color" },
+      { termtype = "", termname = "xterm-256color" },
+    }
     for i = 1, 3 do
-      local termtype = ({ "WezTerm 20240203", "" })[i]
+      local client = other_clients[i]
       image_backend.reset_for_tests()
-      tmux.client_termtype = function()
-        return termtype
+      tmux.client_terminal = function()
+        return client
       end
       local _, name = image_backend.get()
       assert.are.equal("nvim", name)
     end
+  end)
+
+  it("reads the tmux client's terminal type and TERM", function()
+    local previous_system = vim.system
+    local args
+    vim.fn.executable = function(name)
+      return name == "tmux" and 1 or previous_executable(name)
+    end
+    vim.system = function(cmd)
+      args = cmd
+      return {
+        wait = function()
+          return { code = 0, stdout = "\txterm-ghostty\n" }
+        end,
+      }
+    end
+    local ok, result = pcall(previous_tmux_client_terminal)
+    vim.system = previous_system
+
+    assert.is_true(ok, result)
+    assert.are.same({ termtype = "", termname = "xterm-ghostty" }, result)
+    assert.are.same(
+      { "tmux", "display-message", "-p", "#{client_termtype}\t#{client_termname}" },
+      args
+    )
   end)
 
   it("falls back to nvim in tmux auto mode when kitty is unavailable", function()
