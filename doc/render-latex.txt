@@ -232,7 +232,9 @@ Render options:
 
                                       *render-latex-render.equation_labels*
 `render.equation_labels` Add equation labels. Values: `"right"`, `"sign"`,
-                         `"both"`, or `false`. Default: `"right"`.
+                         `"both"`, or `false`. Default: `"right"`. Images move
+                         left to keep a right-aligned label clear, and an image
+                         too wide for that hides the label.
 
                                *render-latex-render.equation_label_format*
 `render.equation_label_format`

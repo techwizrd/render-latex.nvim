@@ -422,13 +422,29 @@ function M.clear_label(bufnr, ns, state, key)
   state.label_layouts[key] = nil
 end
 
+--- The label text drawn at the right edge of the window, or nil when labels go only
+--- in the sign column or are off.
+---@param index integer
+---@return string?
+function M.right_label(index)
+  local style = Config.render.equation_labels
+  if style == "right" or style == "both" then
+    return Config.render.equation_label_format:format(index)
+  end
+  return nil
+end
+
 ---@param bufnr integer
 ---@param ns integer
 ---@param state render_latex.BufferState
 ---@param equation table
 ---@param index integer
-function M.set_equation_label(bufnr, ns, state, equation, index)
+---@param right_fits boolean? false when the image leaves no room for the right-aligned label
+function M.set_equation_label(bufnr, ns, state, equation, index, right_fits)
   local style = Config.render.equation_labels
+  if right_fits == false then
+    style = style == "both" and "sign" or (style ~= "right" and style or false)
+  end
   if not style or style == false then
     M.clear_label(bufnr, ns, state, equation.key)
     return
