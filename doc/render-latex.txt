@@ -454,10 +454,10 @@ With |render-latex-image.placeholders| (the default outside WezTerm), images
 belong to the pane's text, so tmux hides and redraws them itself and no cleanup
 hooks are needed. Each terminal keeps its own copy of the images, so when
 another client attaches to the session, the plugin sends them again. It notices
-the new client when the pane gains focus or the window resizes; a client that
-attaches at the same size while the pane already has focus gets the images as
-equations render again. With fixed placements, session-local cleanup hooks are
-opt-in:
+the new client when the pane gains focus or the window resizes. A client that
+attaches at the same size while tmux still counts the pane as focused, such as
+one reconnecting after a dropped connection, gets them at the next focus change
+or resize. With fixed placements, session-local cleanup hooks are opt-in:
 >
   require("render_latex").setup({
     tmux = { install_cleanup_hooks = true },
