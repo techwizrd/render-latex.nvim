@@ -437,6 +437,12 @@ For image rendering in tmux:
   set -g default-terminal "tmux-256color"
 <
 
+In `auto` mode, Kitty graphics are used inside tmux when Neovim's environment
+names a Kitty graphics terminal, or when tmux's `#{client_termtype}` reports
+Kitty or Ghostty. Control-mode clients (`tmux -CC`) don't report a type, so their
+`#{client_termname}`, the `TERM` they started with, counts instead when it is
+`xterm-kitty` or `xterm-ghostty`. Set `image.backend = "kitty"` to force them.
+
 Session-local cleanup hooks are opt-in:
 >
   require("render_latex").setup({
