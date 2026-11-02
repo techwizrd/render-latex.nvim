@@ -8,6 +8,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Fixed
 
+- Redrew `render-markdown.nvim` when inline math marks change, so versions that measure other plugins' extmarks show concealed math in wrapped table rows instead of raw LaTeX.
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
 
 ## 0.1.0-rc5 - 2026-10-17

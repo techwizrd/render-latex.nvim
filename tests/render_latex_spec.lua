@@ -1063,6 +1063,57 @@ describe("render_latex.integrations.jupynvim", function()
 end)
 
 describe("render_latex.annotations", function()
+  local function with_render_markdown(callback)
+    local previous = package.loaded["render-markdown"]
+    local renders = {}
+    package.loaded["render-markdown"] = {
+      render = function(ctx)
+        renders[#renders + 1] = ctx.buf
+      end,
+    }
+    local ok, err = pcall(callback, renders)
+    package.loaded["render-markdown"] = previous
+    assert(ok, err)
+  end
+
+  it("redraws render-markdown when the inline marks change", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    with_render_markdown(function(renders)
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "| $x_1$ | b |" })
+      local markdown_ns = vim.api.nvim_create_namespace("render-markdown.nvim")
+      vim.api.nvim_buf_set_extmark(buf, markdown_ns, 0, 0, { virt_text = { { "│" } } })
+      local ns = vim.api.nvim_create_namespace("render-latex-test-refresh")
+      local state = { inline_marks = {}, marks = {}, labels = {}, placeholders = {} }
+
+      annotations.render_inline_fallback(buf, ns, state)
+      assert.are.same({ buf }, renders)
+
+      annotations.render_inline_fallback(buf, ns, state)
+      assert.are.same({ buf }, renders)
+
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "| $x_2$ | b |" })
+      annotations.render_inline_fallback(buf, ns, state)
+      assert.are.same({ buf, buf }, renders)
+
+      annotations.clear_marks(buf, ns, state)
+      assert.are.same({ buf, buf, buf }, renders)
+    end)
+  end)
+
+  it("leaves buffers render-markdown is not drawing alone", function()
+    config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
+    with_render_markdown(function(renders)
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "| $x_1$ | b |" })
+      local ns = vim.api.nvim_create_namespace("render-latex-test-no-refresh")
+      local state = { inline_marks = {} }
+
+      annotations.render_inline_fallback(buf, ns, state)
+      assert.are.same({}, renders)
+    end)
+  end)
+
   it("conceals inline math delimiters by default", function()
     config.setup({ render_modes = { vim.api.nvim_get_mode().mode } })
     local buf = vim.api.nvim_create_buf(false, true)

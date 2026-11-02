@@ -129,6 +129,25 @@ function M.render_markdown_conflict(bufnr)
   return status.loaded and status.conflict, status
 end
 
+---Redraws render-markdown.nvim in `bufnr` after the inline math marks changed. Versions that read
+---the extmarks of other plugins then measure table cells with the concealed math, and draw wrapped
+---table rows with it instead of the raw LaTeX.
+---@param bufnr integer
+function M.refresh_render_markdown(bufnr)
+  if not module_loaded("render-markdown") or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  -- Only buffers render-markdown is drawing: render() would attach it to any other buffer.
+  local ns = vim.api.nvim_get_namespaces()["render-markdown.nvim"]
+  if ns == nil or #vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { limit = 1 }) == 0 then
+    return
+  end
+  local render_markdown = safe_require("render-markdown")
+  if type(render_markdown) == "table" and type(render_markdown.render) == "function" then
+    pcall(render_markdown.render, { buf = bufnr })
+  end
+end
+
 function M.obsidian(bufnr)
   return obsidian_status(bufnr)
 end
