@@ -210,6 +210,18 @@ function M.placeholder_row(row, width)
   return table.concat(cells)
 end
 
+local function send_virtual(image, data)
+  transmit(image.img_id, data)
+  send_batched(seq({
+    a = "p",
+    U = "1",
+    i = image.img_id,
+    c = math.min(image.width, #diacritics),
+    r = math.min(image.height, #diacritics),
+    q = "2",
+  }))
+end
+
 --- Sends an image once per `opts.key` and returns a handle to it. The terminal draws it
 --- wherever placeholder text colored with M.image_id(handle) appears.
 ---@param data string PNG bytes
@@ -218,17 +230,8 @@ end
 function M.set_virtual(data, opts)
   local entry = virtual_images[opts.key]
   if entry == nil then
-    local img_id = generate_id()
-    transmit(img_id, data)
-    send_batched(seq({
-      a = "p",
-      U = "1",
-      i = img_id,
-      c = math.min(opts.width, #diacritics),
-      r = math.min(opts.height, #diacritics),
-      q = "2",
-    }))
-    entry = { img_id = img_id, refs = 0 }
+    entry = { img_id = generate_id(), width = opts.width, height = opts.height, refs = 0 }
+    send_virtual(entry, data)
     virtual_images[opts.key] = entry
   end
   entry.refs = entry.refs + 1
@@ -236,6 +239,24 @@ function M.set_virtual(data, opts)
   next_handle = next_handle - 1
   handles[next_handle] = { key = opts.key, img_id = entry.img_id, opts = vim.deepcopy(opts) }
   return next_handle
+end
+
+--- Sends the images M.set_virtual sent before again, under the same ids, for a terminal
+--- that attached after they were first sent: placeholder text already on screen then
+--- draws without changing. `blobs` maps M.set_virtual keys to PNG bytes; images missing
+--- from it are left alone.
+---@param blobs table<string, string>
+---@return integer count images sent
+function M.resend_virtual(blobs)
+  local count = 0
+  for key, image in pairs(virtual_images) do
+    local data = blobs[key]
+    if data ~= nil then
+      send_virtual(image, data)
+      count = count + 1
+    end
+  end
+  return count
 end
 
 ---@param handle integer

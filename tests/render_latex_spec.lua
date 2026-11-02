@@ -1929,6 +1929,78 @@ describe("render_latex.setup", function()
     assert.are.same({ true, false }, cleared)
   end)
 
+  it("sends placeholder images again when a tmux client attaches", function()
+    local tmux = require("render_latex.tmux")
+    local previous_resend = renderer.resend_images
+    local previous_uses_placeholders = renderer.uses_placeholders
+    local previous_client_attached = tmux.client_attached
+    local attached = false
+    local resent = 0
+
+    renderer.resend_images = function()
+      resent = resent + 1
+      return 0
+    end
+    renderer.uses_placeholders = function()
+      return true
+    end
+    tmux.client_attached = function()
+      return attached
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    vim.api.nvim_exec_autocmds("FocusGained", { modeline = false })
+    vim.api.nvim_exec_autocmds("VimResized", { modeline = false })
+    attached = true
+    vim.api.nvim_exec_autocmds("VimResume", { modeline = false })
+    vim.api.nvim_exec_autocmds("FocusGained", { modeline = false })
+    vim.api.nvim_exec_autocmds("VimResized", { modeline = false })
+
+    renderer.resend_images = previous_resend
+    renderer.uses_placeholders = previous_uses_placeholders
+    tmux.client_attached = previous_client_attached
+
+    assert.are.equal(2, resent)
+  end)
+
+  it("tells when a client attaches to the pane's tmux session", function()
+    local previous_system = vim.system
+    local previous_executable = vim.fn.executable
+    local previous_tmux, previous_pane = vim.env.TMUX, vim.env.TMUX_PANE
+    local clients = "101\n"
+    local commands = {}
+
+    local tmux = require("render_latex.tmux")
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.TMUX_PANE = "%3"
+    vim.fn.executable = function()
+      return 1
+    end
+    vim.system = function(cmd)
+      commands[#commands + 1] = cmd
+      return {
+        wait = function()
+          return { code = 0, stdout = clients, stderr = "" }
+        end,
+      }
+    end
+
+    -- The first call records the clients, whatever earlier tests left behind
+    tmux.client_attached()
+    local results = { tmux.client_attached() }
+    clients = "101\n202\n"
+    results[#results + 1] = tmux.client_attached()
+    clients = "202\n"
+    results[#results + 1] = tmux.client_attached()
+
+    vim.system = previous_system
+    vim.fn.executable = previous_executable
+    vim.env.TMUX, vim.env.TMUX_PANE = previous_tmux, previous_pane
+
+    assert.are.same({ false, true, false }, results)
+    assert.are.same({ "tmux", "list-clients", "-F", "#{client_pid}", "-t", "%3" }, commands[1])
+  end)
+
   it("hides terminal images on BufWinLeave", function()
     local previous_hide_visible = renderer.hide_visible
     local previous_detach_inactive_windows = renderer.detach_inactive_windows
@@ -3053,6 +3125,39 @@ describe("render_latex.image_backends.kitty", function()
     assert.is_truthy(sent[3]:find("d=I", 1, true))
   end)
 
+  it("sends virtual images again under the same id", function()
+    local previous_send = vim.api.nvim_ui_send
+    local previous_tmux = vim.env.TMUX
+    local sent = {}
+
+    package.loaded["render_latex.image_backends.kitty"] = nil
+    local kitty = require("render_latex.image_backends.kitty")
+
+    vim.api.nvim_ui_send = function(data)
+      sent[#sent + 1] = data
+    end
+    vim.env.TMUX = nil
+
+    local handle = kitty.set_virtual("png", { key = "eq", width = 4, height = 2 })
+    kitty.set_virtual("png", { key = "other", width = 1, height = 1 })
+    local image_id = kitty.image_id(handle)
+    sent = {}
+    local count = kitty.resend_virtual({ eq = "png", missing = "png" })
+
+    vim.api.nvim_ui_send = previous_send
+    vim.env.TMUX = previous_tmux
+
+    assert.are.equal(1, count)
+    assert.are.equal(2, #sent)
+    assert.is_truthy(sent[1]:find("a=t", 1, true))
+    assert.is_truthy(sent[1]:find("i=" .. image_id, 1, true))
+    assert.is_truthy(sent[2]:find("U=1", 1, true))
+    assert.is_truthy(sent[2]:find("i=" .. image_id, 1, true))
+    assert.is_truthy(sent[2]:find("c=4", 1, true))
+    assert.is_truthy(sent[2]:find("r=2", 1, true))
+    assert.are.equal(image_id, kitty.image_id(handle))
+  end)
+
   it("frees only its own virtual images when deleting everything", function()
     local previous_send = vim.api.nvim_ui_send
     local previous_tmux = vim.env.TMUX
@@ -3469,6 +3574,7 @@ describe("render_latex.renderer", function()
     local previous_readblob = vim.fn.readblob
     local set_virtual_count = 0
     local released = {}
+    local resent
     local test_buf
 
     local backend = {
@@ -3490,6 +3596,10 @@ describe("render_latex.renderer", function()
       end,
       del = function(handle)
         released[#released + 1] = handle
+      end,
+      resend_virtual = function(blobs)
+        resent = blobs
+        return vim.tbl_count(blobs)
       end,
     }
     image_backend.status = function()
@@ -3566,6 +3676,10 @@ describe("render_latex.renderer", function()
       )
       local hl = vim.api.nvim_get_hl(0, { name = "RenderLatexImage" .. 0x123456 })
       assert.are.equal(0x123456, hl.fg)
+
+      assert.are.equal(1, renderer.resend_images())
+      assert.are.same({ ("placeholder-test:%d:5"):format(cells) }, vim.tbl_keys(resent))
+      assert.are.equal("png", resent[("placeholder-test:%d:5"):format(cells)])
     end)
 
     if test_buf ~= nil and vim.api.nvim_buf_is_valid(test_buf) then

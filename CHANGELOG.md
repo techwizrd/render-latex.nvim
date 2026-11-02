@@ -12,6 +12,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Fixed
 
+- Sent placeholder images again when another tmux client attaches, checked when the pane gains focus or the window resizes, so a terminal that attaches later shows the equations rendered before it.
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
 
 ## 0.1.0-rc5 - 2026-10-17

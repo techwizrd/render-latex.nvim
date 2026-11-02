@@ -16,6 +16,45 @@ local function run_tmux(args)
   return vim.system(vim.list_extend({ "tmux" }, args), { text = true }):wait()
 end
 
+-- Pids of the clients last seen on this pane's session
+local known_clients = nil
+
+--- Whether a client attached to this pane's session since the previous call. The first
+--- call only records the clients. Kitty images live in each terminal, so a terminal that
+--- attaches later has none of the images sent before it.
+---@return boolean
+function M.client_attached()
+  if vim.env.TMUX == nil or vim.env.TMUX == "" then
+    return false
+  end
+
+  local args = { "list-clients", "-F", "#{client_pid}" }
+  local pane = vim.env.TMUX_PANE
+  if pane ~= nil and pane ~= "" then
+    vim.list_extend(args, { "-t", pane })
+  end
+  local result = run_tmux(args)
+  if result.code ~= 0 then
+    return false
+  end
+
+  local clients = {}
+  for pid in (result.stdout or ""):gmatch("%d+") do
+    clients[pid] = true
+  end
+  local previous = known_clients
+  known_clients = clients
+  if previous == nil then
+    return false
+  end
+  for pid in pairs(clients) do
+    if not previous[pid] then
+      return true
+    end
+  end
+  return false
+end
+
 function M.option(name)
   local result = run_tmux({ "show-options", "-qvg", name })
   return result.code == 0 and vim.trim(result.stdout or "") or nil

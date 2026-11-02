@@ -1648,6 +1648,41 @@ function M.debug_current(bufnr)
     nil
 end
 
+--- Sends the placeholder images again, for a terminal that attached after they were sent.
+--- The placeholder text stays as it is, so nothing flickers in the terminals that had them.
+---@return integer count images sent
+function M.resend_images()
+  local backend = ImageBackend.get()
+  if
+    backend == nil
+    or not uses_placeholders(backend)
+    or type(backend.resend_virtual) ~= "function"
+  then
+    return 0
+  end
+
+  local blobs = {}
+  for _, state in pairs(buffers) do
+    for winid, images in pairs(state.images) do
+      for key in pairs(images) do
+        local fingerprint = state.placements[winid] and state.placements[winid][key]
+        local meta = state.metadata[key]
+        if fingerprint ~= nil and meta ~= nil and blobs[fingerprint] == nil then
+          -- The window keeps an older image until it renders again: send that one
+          local current = table.concat({ meta.cache_key, meta.width_cells, meta.height_cells }, ":")
+          if current == fingerprint then
+            blobs[fingerprint] = read_blob(state, { key = key }, meta)
+          end
+        end
+      end
+    end
+  end
+
+  return with_backend_batch(backend, function()
+    return backend.resend_virtual(blobs)
+  end)
+end
+
 --- Whether images are drawn through Kitty Unicode placeholders.
 ---@return boolean
 function M.uses_placeholders()
