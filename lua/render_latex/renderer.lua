@@ -769,8 +769,11 @@ local function collect_window_snapshot(bufnr, viewport_state, prefetch)
     local text_top, text_bottom = Viewport.visible_text_bounds(winid)
     snapshot.winids[#snapshot.winids + 1] = winid
     snapshot.ranges[#snapshot.ranges + 1] = { top = top, bottom = bottom }
+    local width = vim.api.nvim_win_get_width(winid)
     snapshot.windows[winid] = {
-      width = vim.api.nvim_win_get_width(winid),
+      width = width,
+      -- The window's last screen column, where a right-aligned label ends
+      right_col = vim.fn.win_screenpos(winid)[2] + width - 1,
       text_top = text_top,
       text_bottom = text_bottom,
       cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1,
@@ -827,15 +830,26 @@ local function clear_suppressed_label(context, bufnr, state, equation)
   end
 end
 
-local function update_label(context, bufnr, state, equation, visible_index)
+local function update_label(context, bufnr, state, equation, visible_index, right_fits)
   if should_suppress_label(context) then
     Annotations.clear_label(bufnr, Config.ns, state, equation.key)
     return
   end
-  Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
+  Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index, right_fits)
 end
 
-local function update_image(bufnr, winid, equation, meta, backend, window, preview)
+-- Columns the right-aligned label takes at the end of the equation's first row,
+-- with a space before it, or 0 when it has none.
+local function label_reserve(context, visible_index)
+  local label = not should_suppress_label(context) and Annotations.right_label(visible_index)
+  return label and vim.fn.strdisplaywidth(label) + 1 or 0
+end
+
+-- Places the equation's image in a window. Over the source, `reserve` columns at the
+-- right end of the first row stay free for the label, shifting the image left when it's
+-- centered too far right. Returns whether the image is placed, and false second when
+-- the image is too wide to leave that room.
+local function update_image(bufnr, winid, equation, meta, backend, window, preview, reserve)
   if not Util.win_is_valid(winid) then
     return false
   end
@@ -866,6 +880,18 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
   local width = math.max(1, bounds.width or window.width)
   local start_col = bounds.start_col or position.col
   local col = start_col + math.max(0, math.floor((width - meta.width_cells) / 2))
+  local beside = true
+  if not preview and (reserve or 0) > 0 and window.right_col ~= nil then
+    local last_col = window.right_col - reserve
+    if col + meta.width_cells - 1 > last_col then
+      local shifted = last_col - meta.width_cells + 1
+      if shifted >= start_col then
+        col = shifted
+      else
+        beside = false
+      end
+    end
+  end
   local opts = {
     row = row,
     col = col,
@@ -880,7 +906,7 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
       last_backend_warning = reason
       Util.warn(reason or "No image backend is available")
     end
-    return false
+    return false, beside
   end
   last_backend_warning = nil
 
@@ -892,7 +918,7 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
       if not ok then
         state.metadata[equation.key] = nil
         Util.warn(("Failed to read rendered equation image: %s"):format(result))
-        return false
+        return false, beside
       end
       blob = result
       blob_cache_put(meta.cache_key, blob)
@@ -901,7 +927,7 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
     local ok, result = pcall(backend.set, blob, opts)
     if not ok then
       Util.warn(("Failed to place rendered equation image: %s"):format(result))
-      return false
+      return false, beside
     end
     state.images[winid][equation.key] = result
     state.placements[winid][equation.key] = placement_fingerprint
@@ -913,13 +939,41 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
         pcall(backend.del, image_id)
         state.images[winid][equation.key] = nil
         state.placements[winid][equation.key] = nil
-        return false
+        return false, beside
       end
       state.placements[winid][equation.key] = placement_fingerprint
     end
   end
 
-  return true
+  return true, beside
+end
+
+-- Places the image in every window of the snapshot over its source, then labels it.
+-- The right-aligned label is dropped when the image is too wide to leave room for it.
+local function place_equation(
+  bufnr,
+  equation,
+  meta,
+  backend,
+  snapshot,
+  active_images,
+  context,
+  visible_index
+)
+  local state = get_buffer_state(bufnr)
+  local reserve = label_reserve(context, visible_index)
+  local right_fits = true
+  for _, winid in ipairs(snapshot.winids) do
+    local window = snapshot.windows[winid]
+    local placed, beside =
+      update_image(bufnr, winid, equation, meta, backend, window, false, reserve)
+    if placed then
+      active_images[winid] = active_images[winid] or {}
+      active_images[winid][equation.key] = true
+    end
+    right_fits = right_fits and beside ~= false
+  end
+  update_label(context, bufnr, state, equation, visible_index, right_fits)
 end
 
 local function clear_unplaced_display(bufnr, state, key, active_images, backend)
@@ -1047,13 +1101,16 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
         needs_render = true
       else
         ensure_mark(bufnr, equation, meta, context)
-        update_label(context, bufnr, state, equation, visible_index)
-        for _, winid in ipairs(snapshot.winids) do
-          if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
-            active_images[winid] = active_images[winid] or {}
-            active_images[winid][equation.key] = true
-          end
-        end
+        place_equation(
+          bufnr,
+          equation,
+          meta,
+          backend,
+          snapshot,
+          active_images,
+          context,
+          visible_index
+        )
       end
       clear_unplaced_display(bufnr, state, equation.key, active_images, backend)
     end
@@ -1256,13 +1313,16 @@ function M.render(bufnr)
         batch[#batch + 1] = equation
       else
         ensure_mark(bufnr, equation, meta, context)
-        update_label(context, bufnr, state, equation, visible_index)
-        for _, winid in ipairs(snapshot.winids) do
-          if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
-            active_images[winid] = active_images[winid] or {}
-            active_images[winid][equation.key] = true
-          end
-        end
+        place_equation(
+          bufnr,
+          equation,
+          meta,
+          backend,
+          snapshot,
+          active_images,
+          context,
+          visible_index
+        )
       end
       clear_unplaced_display(bufnr, state, equation.key, active_images, backend)
     end

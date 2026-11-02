@@ -3537,6 +3537,121 @@ describe("render_latex.renderer", function()
     assert.are.equal(2, request_count)
   end)
 
+  it("keeps room for the right-aligned label beside wide images", function()
+    config.setup({ render = { equation_labels = "right", scale = 1 } })
+    local previous_img = vim.ui.img
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_detect_scan = detect.scan
+    local previous_viewport_range = viewport.viewport_range
+    local previous_visible_text_bounds = viewport.visible_text_bounds
+    local previous_readblob = vim.fn.readblob
+    local placed
+    local backend = {
+      set = function(_, opts)
+        placed = opts
+        return 1
+      end,
+      del = function() end,
+      get = function()
+        return nil
+      end,
+    }
+    vim.ui.img = backend
+    image_backend.status = function()
+      return { available = true, name = "nvim" }
+    end
+    image_backend.get = function()
+      return backend, "nvim"
+    end
+    local width_px
+    local requests = 0
+    worker.request_batch = function(_, callback)
+      requests = requests + 1
+      callback({
+        {
+          result = {
+            width_px = width_px,
+            height_px = 10,
+            png_path = "/tmp/render-latex-label-room.png",
+            cache_key = "label-room-" .. requests,
+          },
+        },
+      }, nil)
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+    viewport.viewport_range = function()
+      return 0, 4
+    end
+    viewport.visible_text_bounds = function()
+      return 1, 20
+    end
+
+    -- Renders a fresh buffer whose equation is `cells` columns wide, and returns the
+    -- placement and the label text, if any.
+    local function render(cells)
+      detect.scan = function()
+        return {
+          { key = "display:1:3:" .. cells, start_row = 0, end_row = 2, text = "x", quoted = false },
+        }
+      end
+      placed = nil
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(buf)
+      vim.bo[buf].filetype = "markdown"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "x", "$$", "after" })
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+      width_px = cells * config.image.cell_width_px
+      renderer.attach(buf)
+      renderer.render(buf)
+      vim.wait(200, function()
+        return placed ~= nil
+      end)
+      local label
+      for _, mark in
+        ipairs(vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true }))
+      do
+        local text = mark[4].virt_text
+        if text and text[1] and text[1][1]:match("^Eq%.") then
+          label = text[1][1]
+        end
+      end
+      renderer.clear(buf)
+      vim.api.nvim_buf_delete(buf, { force = true })
+      return placed, label
+    end
+
+    local ok, err = pcall(function()
+      local right_col = vim.api.nvim_win_get_width(0)
+      -- " Eq. 1" takes the last 6 columns
+      local cells = right_col - 10
+      local opts, label = render(cells)
+      assert.is_truthy(opts)
+      assert.are.equal("Eq. 1", label)
+      assert.are.equal(right_col - 6, opts.col + opts.width - 1)
+
+      opts, label = render(right_col - 2)
+      assert.is_truthy(opts)
+      assert.is_nil(label)
+    end)
+
+    vim.ui.img = previous_img
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    worker.request_batch = previous_request_batch
+    detect.scan = previous_detect_scan
+    viewport.viewport_range = previous_viewport_range
+    viewport.visible_text_bounds = previous_visible_text_bounds
+    vim.fn.readblob = previous_readblob
+    config.setup()
+    if not ok then
+      error(err)
+    end
+  end)
+
   it("uses jupynvim cell margins and suppresses default labels", function()
     with_jupynvim_render({}, function(buf, captured_opts)
       assert.is_truthy(captured_opts)
