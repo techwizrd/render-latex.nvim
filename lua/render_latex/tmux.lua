@@ -21,6 +21,14 @@ function M.option(name)
   return result.code == 0 and vim.trim(result.stdout or "") or nil
 end
 
+--- The attached client's terminal as it answered XTVERSION, such as "ghostty 1.2.0".
+--- Empty when the terminal didn't answer, nil when tmux can't be asked.
+---@return string?
+function M.client_termtype()
+  local result = run_tmux({ "display-message", "-p", "#{client_termtype}" })
+  return result.code == 0 and vim.trim(result.stdout or "") or nil
+end
+
 ---@param global boolean
 function M.hooks(global)
   local args = { "show-hooks" }

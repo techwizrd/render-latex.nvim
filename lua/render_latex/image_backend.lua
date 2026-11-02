@@ -15,6 +15,11 @@ local tmux_passthrough = {
   checked_at = 0,
 }
 
+local tmux_client = {
+  value = nil,
+  checked_at = 0,
+}
+
 local PROBE_TIMEOUT_MS = 500
 local PROBE_RETRY_MS = 2000
 local TMUX_CACHE_MS = 2000
@@ -85,6 +90,30 @@ local function tmux_passthrough_enabled()
   return tmux_passthrough.value
 end
 
+-- Over SSH, the environment inside tmux doesn't name the terminal tmux is attached to,
+-- but tmux keeps the XTVERSION reply of the attached client. WezTerm is left out: it
+-- lacks Unicode placeholders, and inside tmux its TERM_PROGRAM can't turn them off.
+local function tmux_client_kitty()
+  if not is_tmux() or vim.fn.executable("tmux") ~= 1 then
+    return false
+  end
+
+  local now = vim.uv.now()
+  if tmux_client.value ~= nil and now - tmux_client.checked_at < TMUX_CACHE_MS then
+    return tmux_client.value
+  end
+
+  local termtype = (require("render_latex.tmux").client_termtype() or ""):lower()
+  tmux_client.value = termtype:find("kitty", 1, true) ~= nil
+    or termtype:find("ghostty", 1, true) ~= nil
+  tmux_client.checked_at = now
+  return tmux_client.value
+end
+
+local function tmux_kitty_terminal()
+  return known_kitty_terminal() or tmux_client_kitty()
+end
+
 local function notify_listeners(status)
   for _, listener in ipairs(listeners) do
     pcall(listener, status)
@@ -146,8 +175,7 @@ local function kitty_supported()
     return false
   end
   if is_tmux() then
-    return tmux_passthrough_enabled()
-      and (known_kitty_terminal() or Config.image.backend == "kitty")
+    return tmux_passthrough_enabled() and (Config.image.backend == "kitty" or tmux_kitty_terminal())
   end
   if known_kitty_terminal() then
     return true
@@ -173,7 +201,7 @@ local function kitty_unavailable_reason()
   if is_tmux() and not tmux_passthrough_enabled() then
     return "tmux allow-passthrough is not enabled"
   end
-  if is_tmux() and not known_kitty_terminal() then
+  if is_tmux() and not tmux_kitty_terminal() then
     return "tmux outer terminal is not known to support Kitty graphics; set image.backend = 'kitty' to force it"
   end
   return "kitty image protocol is not available in this terminal"
@@ -238,6 +266,8 @@ function M.reset_for_tests()
   probe.unsupported_at = nil
   tmux_passthrough.value = nil
   tmux_passthrough.checked_at = 0
+  tmux_client.value = nil
+  tmux_client.checked_at = 0
 end
 
 return M

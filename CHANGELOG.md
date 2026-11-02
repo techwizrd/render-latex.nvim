@@ -9,6 +9,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 ### Fixed
 
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
+- Detected Kitty and Ghostty from the terminal tmux is attached to, so display math renders in tmux over SSH, where the environment doesn't name the terminal.
 
 ## 0.1.0-rc5 - 2026-10-17
 
