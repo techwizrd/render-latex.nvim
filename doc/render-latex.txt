@@ -236,7 +236,9 @@ Render options:
 
                                *render-latex-render.equation_label_format*
 `render.equation_label_format`
-                         Label text format. Default: `"Eq. %d"`.
+                         Label text format. `%d` is the equation's position
+                         among the display equations in the buffer. Default:
+                         `"Eq. %d"`.
 
                                                *render-latex-render.padding*
 `render.padding`         Padding around rendered equations. Default: `10`.
