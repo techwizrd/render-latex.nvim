@@ -93,6 +93,7 @@ local function register_autocmds()
   vim.api.nvim_create_autocmd("ColorScheme", {
     group = Config.augroup,
     callback = function()
+      Renderer.refresh_highlights()
       if update_transient_ui_suppression(false) then
         queue_visible_buffers()
       end
@@ -170,16 +171,40 @@ local function register_autocmds()
 
   vim.api.nvim_create_autocmd({ "FocusLost", "VimSuspend" }, {
     group = Config.augroup,
-    callback = function()
+    callback = function(args)
+      -- Images placed at screen positions would stay painted over whatever replaces
+      -- this pane. Placeholder images are text to tmux and go away with the pane.
+      if args.event == "FocusLost" and Renderer.uses_placeholders() then
+        return
+      end
       Renderer.clear_all()
     end,
   })
 
+  -- A terminal that attaches to tmux has none of the placeholder images sent before it.
+  -- Attaching focuses the pane unless another focused client is already there, and a
+  -- client of another size resizes it, so check on both. Record the clients now.
+  local Tmux = require("render_latex.tmux")
+  Tmux.client_attached()
+  local function resend_if_client_attached()
+    if Renderer.uses_placeholders() and Tmux.client_attached() then
+      Renderer.resend_images()
+    end
+  end
+
   vim.api.nvim_create_autocmd({ "FocusGained", "VimResume" }, {
     group = Config.augroup,
-    callback = function()
+    callback = function(args)
+      if args.event == "FocusGained" then
+        resend_if_client_attached()
+      end
       update_transient_ui_suppression(true)
     end,
+  })
+
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = Config.augroup,
+    callback = resend_if_client_attached,
   })
 
   vim.api.nvim_create_autocmd("VimLeavePre", {

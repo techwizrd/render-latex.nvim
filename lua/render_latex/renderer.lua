@@ -241,6 +241,22 @@ end
 
 local with_backend_batch
 
+-- With Unicode placeholders the image is text in the buffer: the terminal moves,
+-- scrolls and hides it with the text, so nothing has to be re-placed or wiped for it.
+local function uses_placeholders(backend)
+  return backend ~= nil and type(backend.placeholders) == "function" and backend.placeholders()
+end
+
+local placeholder_highlights = {}
+
+-- The terminal reads the image id from the placeholder's 24-bit foreground color
+local function placeholder_highlight(image_id)
+  local name = "RenderLatexImage" .. image_id
+  placeholder_highlights[name] = image_id
+  vim.api.nvim_set_hl(0, name, { fg = ("#%06x"):format(image_id % 0x1000000), nocombine = true })
+  return name
+end
+
 local function clear_images(bufnr)
   local state = buffers[bufnr]
   if state == nil then
@@ -614,6 +630,10 @@ end
 
 function M.hide_visible()
   local backend = ImageBackend.get()
+  if uses_placeholders(backend) then
+    -- Placeholder images can't outlive or cover their window: nothing to hide
+    return
+  end
   if backend ~= nil then
     pcall(backend.del, math.huge)
   end
@@ -679,7 +699,16 @@ local function sync_focus(bufnr, indexed_equations, snapshot)
   return focused
 end
 
-local function ensure_mark(bufnr, equation, meta, context)
+-- Virtual line chunks for image row `row`: placeholder text when the image is shown
+-- through placeholders, else a blank line the placed image covers.
+local function reserved_line(grid, row)
+  if grid == nil then
+    return { { " ", "Conceal" } }
+  end
+  return { { string.rep(" ", grid.offset) }, { grid.row(row), grid.hl } }
+end
+
+local function ensure_mark(bufnr, equation, meta, context, grid)
   local state = get_buffer_state(bufnr)
   local source_lines = equation.end_row - equation.start_row + 1
   local reserved = math.max(0, meta.height_cells - source_lines)
@@ -689,14 +718,17 @@ local function ensure_mark(bufnr, equation, meta, context)
     reserved,
     Config.conceal and 1 or 0,
     context.clear_source_line_background and 1 or 0,
+    grid and grid.layout or "",
   }, ":")
   if state.marks[equation.key] ~= nil and state.mark_layouts[equation.key] == layout then
     return
   end
   local virt_lines = {}
 
-  for _ = 1, reserved do
-    virt_lines[#virt_lines + 1] = { { " ", "Conceal" } }
+  -- The image starts on the first source line, the reserved lines come right after it,
+  -- and the rest of the source lines follow
+  for index = 1, reserved do
+    virt_lines[#virt_lines + 1] = reserved_line(grid, index + 1)
   end
 
   if state.marks[equation.key] ~= nil then
@@ -725,23 +757,40 @@ local function ensure_mark(bufnr, equation, meta, context)
         })
     end
   end
+  if grid ~= nil then
+    for offset = 0, source_lines - 1 do
+      local image_row = offset == 0 and 1 or reserved + offset + 1
+      if image_row > meta.height_cells then
+        break
+      end
+      state.source_line_marks[equation.key][#state.source_line_marks[equation.key] + 1] =
+        vim.api.nvim_buf_set_extmark(bufnr, Config.ns, equation.start_row + offset, 0, {
+          virt_text = { { grid.row(image_row), grid.hl } },
+          virt_text_pos = "overlay",
+          virt_text_win_col = grid.offset,
+          hl_mode = "replace",
+          priority = 250,
+        })
+    end
+  end
   state.mark_layouts[equation.key] = layout
 end
 
-local function ensure_preview_mark(bufnr, equation, meta)
+local function ensure_preview_mark(bufnr, equation, meta, grid)
   local state = get_buffer_state(bufnr)
   local layout = table.concat({
     "preview",
     equation.end_row,
     meta.height_cells,
+    grid and grid.layout or "",
   }, ":")
   if state.marks[equation.key] ~= nil and state.mark_layouts[equation.key] == layout then
     return
   end
 
   local virt_lines = {}
-  for _ = 1, meta.height_cells do
-    virt_lines[#virt_lines + 1] = { { " ", "Conceal" } }
+  for row = 1, meta.height_cells do
+    virt_lines[#virt_lines + 1] = reserved_line(grid, row)
   end
 
   if state.marks[equation.key] ~= nil then
@@ -762,6 +811,7 @@ local function collect_window_snapshot(bufnr, viewport_state, prefetch)
     winids = {},
     ranges = {},
     windows = {},
+    primary = nil,
   }
 
   for _, winid in ipairs(Util.current_tab_wins_for_buf(bufnr)) do
@@ -776,6 +826,9 @@ local function collect_window_snapshot(bufnr, viewport_state, prefetch)
       cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1,
     }
   end
+  -- Placeholder text is shared by every window on the buffer: center it for this one
+  local current = vim.api.nvim_get_current_win()
+  snapshot.primary = snapshot.windows[current] ~= nil and current or snapshot.winids[1]
 
   return snapshot
 end
@@ -835,9 +888,60 @@ local function update_label(context, bufnr, state, equation, visible_index)
   Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
 end
 
+local function read_blob(state, equation, meta)
+  local blob = blob_cache_get(meta.cache_key)
+  if blob ~= nil then
+    return blob
+  end
+  local ok, result = pcall(vim.fn.readblob, meta.png_path)
+  if not ok then
+    state.metadata[equation.key] = nil
+    Util.warn(("Failed to read rendered equation image: %s"):format(result))
+    return nil
+  end
+  blob_cache_put(meta.cache_key, result)
+  return result
+end
+
+-- Placeholder mode: the window only needs a handle on the equation's image.
+-- Where it shows up is decided by the placeholder text (see placeholder_grid).
+local function update_virtual_image(bufnr, winid, equation, meta, backend)
+  local state = get_buffer_state(bufnr)
+  state.images[winid] = state.images[winid] or {}
+  state.placements[winid] = state.placements[winid] or {}
+  local fingerprint = table.concat({ meta.cache_key, meta.width_cells, meta.height_cells }, ":")
+  local handle = state.images[winid][equation.key]
+  if handle ~= nil and state.placements[winid][equation.key] == fingerprint then
+    return true
+  end
+
+  local blob = read_blob(state, equation, meta)
+  if blob == nil then
+    return false
+  end
+  local ok, result = pcall(backend.set_virtual, blob, {
+    key = fingerprint,
+    width = meta.width_cells,
+    height = meta.height_cells,
+  })
+  if not ok then
+    Util.warn(("Failed to place rendered equation image: %s"):format(result))
+    return false
+  end
+  if handle ~= nil then
+    pcall(backend.del, handle)
+  end
+  state.images[winid][equation.key] = result
+  state.placements[winid][equation.key] = fingerprint
+  return true
+end
+
 local function update_image(bufnr, winid, equation, meta, backend, window, preview)
   if not Util.win_is_valid(winid) then
     return false
+  end
+  if uses_placeholders(backend) then
+    return update_virtual_image(bufnr, winid, equation, meta, backend)
   end
 
   local position_row = preview and equation.end_row or equation.start_row
@@ -886,16 +990,9 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
 
   local image_id = state.images[winid][equation.key]
   if image_id == nil then
-    local blob = blob_cache_get(meta.cache_key)
+    local blob = read_blob(state, equation, meta)
     if blob == nil then
-      local ok, result = pcall(vim.fn.readblob, meta.png_path)
-      if not ok then
-        state.metadata[equation.key] = nil
-        Util.warn(("Failed to read rendered equation image: %s"):format(result))
-        return false
-      end
-      blob = result
-      blob_cache_put(meta.cache_key, blob)
+      return false
     end
 
     local ok, result = pcall(backend.set, blob, opts)
@@ -920,6 +1017,79 @@ local function update_image(bufnr, winid, equation, meta, backend, window, previ
   end
 
   return true
+end
+
+-- The placeholder text for an equation, centered as the fixed placement would be in
+-- the snapshot's primary window. Nil until that window holds the image.
+local function placeholder_grid(bufnr, equation, meta, backend, snapshot)
+  local winid = snapshot.primary
+  local state = get_buffer_state(bufnr)
+  local handle = winid ~= nil and state.images[winid] and state.images[winid][equation.key]
+  local image_id = handle and backend.image_id(handle)
+  if image_id == nil then
+    return nil
+  end
+
+  local window = snapshot.windows[winid]
+  local info = vim.fn.getwininfo(winid)[1]
+  local text_col = info.wincol + info.textoff
+  local bounds = Sources.image_bounds(bufnr, winid, window, { row = info.winrow, col = text_col })
+  local width = math.max(1, bounds.width or window.width)
+  local start_col = bounds.start_col or text_col
+  local offset = math.max(0, start_col - text_col + math.floor((width - meta.width_cells) / 2))
+  local cells = meta.width_cells
+  return {
+    hl = placeholder_highlight(image_id),
+    offset = offset,
+    layout = image_id .. "@" .. offset,
+    row = function(row)
+      return backend.placeholder_row(row, cells)
+    end,
+  }
+end
+
+-- Shows a rendered equation in every window of the snapshot, below its source when
+-- `preview` is set (live preview while editing), over it otherwise.
+local function show_equation(
+  bufnr,
+  equation,
+  meta,
+  backend,
+  snapshot,
+  active_images,
+  context,
+  preview
+)
+  local function place_images()
+    for _, winid in ipairs(snapshot.winids) do
+      if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], preview) then
+        active_images[winid] = active_images[winid] or {}
+        active_images[winid][equation.key] = true
+      end
+    end
+  end
+
+  if not uses_placeholders(backend) then
+    if preview then
+      ensure_preview_mark(bufnr, equation, meta)
+    else
+      ensure_mark(bufnr, equation, meta, context)
+    end
+    place_images()
+    return
+  end
+
+  -- The placeholder text needs the image id, so the image comes first
+  place_images()
+  local grid = placeholder_grid(bufnr, equation, meta, backend, snapshot)
+  if grid == nil then
+    return
+  end
+  if preview then
+    ensure_preview_mark(bufnr, equation, meta, grid)
+  else
+    ensure_mark(bufnr, equation, meta, context, grid)
+  end
 end
 
 local function clear_unplaced_display(bufnr, state, key, active_images, backend)
@@ -978,7 +1148,8 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
   local option_cache = {}
   local backend_status = ImageBackend.status()
   local backend = backend_status.available and ImageBackend.get() or nil
-  local floating_suppressed = suppression.floating
+  -- Floating windows cover placeholder text like any other text
+  local floating_suppressed = suppression.floating and not uses_placeholders(backend)
   local needs_render = false
   local focused = active_focus_counts(state.focused_keys)
   local context = Sources.render_context(bufnr)
@@ -996,15 +1167,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
         Annotations.clear_label(bufnr, Config.ns, state, equation.key)
         if not metadata_matches(meta, equation, option_cache) then
           if meta ~= nil and backend ~= nil then
-            ensure_preview_mark(bufnr, equation, meta)
-            for _, winid in ipairs(snapshot.winids) do
-              if
-                update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
-              then
-                active_images[winid] = active_images[winid] or {}
-                active_images[winid][equation.key] = true
-              end
-            end
+            show_equation(bufnr, equation, meta, backend, snapshot, active_images, context, true)
           end
           needs_render = true
         elseif backend == nil then
@@ -1015,15 +1178,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
           end
           needs_render = true
         else
-          ensure_preview_mark(bufnr, equation, meta)
-          for _, winid in ipairs(snapshot.winids) do
-            if
-              update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
-            then
-              active_images[winid] = active_images[winid] or {}
-              active_images[winid][equation.key] = true
-            end
-          end
+          show_equation(bufnr, equation, meta, backend, snapshot, active_images, context, true)
         end
       elseif
         focused[equation.key] and should_hide_focused_equation(context, state, equation.key)
@@ -1046,14 +1201,8 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
         end
         needs_render = true
       else
-        ensure_mark(bufnr, equation, meta, context)
         update_label(context, bufnr, state, equation, visible_index)
-        for _, winid in ipairs(snapshot.winids) do
-          if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
-            active_images[winid] = active_images[winid] or {}
-            active_images[winid][equation.key] = true
-          end
-        end
+        show_equation(bufnr, equation, meta, backend, snapshot, active_images, context, false)
       end
       clear_unplaced_display(bufnr, state, equation.key, active_images, backend)
     end
@@ -1187,7 +1336,8 @@ function M.render(bufnr)
   local active_images = {}
   local backend_status = ImageBackend.status()
   local backend = backend_status.available and ImageBackend.get() or nil
-  local floating_suppressed = suppression.floating
+  -- Floating windows cover placeholder text like any other text
+  local floating_suppressed = suppression.floating and not uses_placeholders(backend)
   local batch = {}
   local visible_index = 0
   local option_cache = {}
@@ -1206,15 +1356,7 @@ function M.render(bufnr)
           Annotations.clear_label(bufnr, Config.ns, state, equation.key)
           if not metadata_matches(meta, equation, option_cache) then
             if meta ~= nil and backend_status.available then
-              ensure_preview_mark(bufnr, equation, meta)
-              for _, winid in ipairs(snapshot.winids) do
-                if
-                  update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
-                then
-                  active_images[winid] = active_images[winid] or {}
-                  active_images[winid][equation.key] = true
-                end
-              end
+              show_equation(bufnr, equation, meta, backend, snapshot, active_images, context, true)
             end
             batch[#batch + 1] = equation
           elseif not backend_status.available then
@@ -1224,15 +1366,7 @@ function M.render(bufnr)
               Util.warn(backend_status.reason or "No image backend is available")
             end
           else
-            ensure_preview_mark(bufnr, equation, meta)
-            for _, winid in ipairs(snapshot.winids) do
-              if
-                update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid], true)
-              then
-                active_images[winid] = active_images[winid] or {}
-                active_images[winid][equation.key] = true
-              end
-            end
+            show_equation(bufnr, equation, meta, backend, snapshot, active_images, context, true)
           end
         else
           clear_equation_display(bufnr, equation.key, backend, true)
@@ -1255,14 +1389,8 @@ function M.render(bufnr)
       elseif not metadata_matches(meta, equation, option_cache) then
         batch[#batch + 1] = equation
       else
-        ensure_mark(bufnr, equation, meta, context)
         update_label(context, bufnr, state, equation, visible_index)
-        for _, winid in ipairs(snapshot.winids) do
-          if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
-            active_images[winid] = active_images[winid] or {}
-            active_images[winid][equation.key] = true
-          end
-        end
+        show_equation(bufnr, equation, meta, backend, snapshot, active_images, context, false)
       end
       clear_unplaced_display(bufnr, state, equation.key, active_images, backend)
     end
@@ -1518,6 +1646,54 @@ function M.debug_current(bufnr)
     metadata = state.metadata[equation.key],
   },
     nil
+end
+
+--- Sends the placeholder images again, for a terminal that attached after they were sent.
+--- The placeholder text stays as it is, so nothing flickers in the terminals that had them.
+---@return integer count images sent
+function M.resend_images()
+  local backend = ImageBackend.get()
+  if
+    backend == nil
+    or not uses_placeholders(backend)
+    or type(backend.resend_virtual) ~= "function"
+  then
+    return 0
+  end
+
+  local blobs = {}
+  for _, state in pairs(buffers) do
+    for winid, images in pairs(state.images) do
+      for key in pairs(images) do
+        local fingerprint = state.placements[winid] and state.placements[winid][key]
+        local meta = state.metadata[key]
+        if fingerprint ~= nil and meta ~= nil and blobs[fingerprint] == nil then
+          -- The window keeps an older image until it renders again: send that one
+          local current = table.concat({ meta.cache_key, meta.width_cells, meta.height_cells }, ":")
+          if current == fingerprint then
+            blobs[fingerprint] = read_blob(state, { key = key }, meta)
+          end
+        end
+      end
+    end
+  end
+
+  return with_backend_batch(backend, function()
+    return backend.resend_virtual(blobs)
+  end)
+end
+
+--- Whether images are drawn through Kitty Unicode placeholders.
+---@return boolean
+function M.uses_placeholders()
+  return uses_placeholders((ImageBackend.get()))
+end
+
+--- Defines the placeholder highlights again after `:highlight clear` dropped them.
+function M.refresh_highlights()
+  for _, image_id in pairs(placeholder_highlights) do
+    placeholder_highlight(image_id)
+  end
 end
 
 function M.resolved_options(equation)

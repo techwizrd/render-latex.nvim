@@ -60,7 +60,7 @@ The plugin sets itself up with useful defaults and installs the matching prebuil
 - Handles inline math like `$x^2$` with a fast conceal/highlight fallback instead of image flicker.
 - Uses a persistent Rust worker that starts once, batches visible equations, and keeps a warm cache and directional prefetching.
 - Installs the matching prebuilt worker automatically on common platforms, with a manual source-build path when needed.
-- Chooses a safe image backend for Neovim image support or Kitty graphics, including tmux passthrough.
+- Chooses a safe image backend for Neovim image support or Kitty graphics, including tmux passthrough. Kitty images use Unicode placeholders, so they scroll with the text and survive tmux pane and window switches.
 - Plays nicely with Markdown note-taking setups, like [`render-markdown.nvim`](https://github.com/MeanderingProgrammer/render-markdown.nvim), [`obsidian.nvim`](https://github.com/obsidian-nvim/obsidian.nvim), and [jupynvim](https://github.com/sheng-tse/jupynvim) (for Jupyter support), instead of trying to own the whole buffer.
 
 The goal is intentionally narrow: make equations in Markdown easier to read in Neovim without replacing your Markdown renderer, note-taking setup, or LaTeX workflow.
@@ -224,7 +224,7 @@ After that, the main things I want to explore are:
 - [ ] SVG rendering, once Neovim or custom providers can handle it well.
 - [ ] Moving more render-queue logic into the Rust worker.
 - [ ] Worker-side parsing/indexing for large notes.
-- [ ] Kitty placeholder-based rendering for better tmux and scroll behavior.
+- [x] Kitty placeholder-based rendering for better tmux and scroll behavior.
 - [ ] Checksum verification for downloaded workers.
 - [ ] Moving doctor/tmux diagnostic formatting out of `init.lua` if it keeps growing.
 

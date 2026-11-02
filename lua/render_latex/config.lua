@@ -28,6 +28,7 @@
 
 ---@class render_latex.ImageOptions
 ---@field backend 'auto'|'nvim'|'kitty'
+---@field placeholders 'auto'|boolean
 ---@field zindex integer
 ---@field cell_width_px number
 ---@field cell_height_px number
@@ -96,6 +97,7 @@ local defaults = {
   },
   image = {
     backend = "auto",
+    placeholders = "auto",
     zindex = 60,
     cell_width_px = 10,
     cell_height_px = 20,
@@ -202,6 +204,9 @@ function M.setup(opts)
 
   validate_enum("render.preset", config.render.preset, { "match_text", "compact", "presentation" })
   validate_enum("image.backend", config.image.backend, { "auto", "nvim", "kitty" })
+  if type(config.image.placeholders) ~= "boolean" and config.image.placeholders ~= "auto" then
+    error("image.placeholders must be 'auto', true, or false", 2)
+  end
   if config.render.inline ~= false then
     validate_enum("render.inline", config.render.inline, { "conceal", "content", "highlight" })
   end

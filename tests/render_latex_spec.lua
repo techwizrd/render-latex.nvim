@@ -1904,6 +1904,103 @@ describe("render_latex.setup", function()
     assert.are.equal(3, hide_count)
   end)
 
+  it("keeps placeholder images when the terminal loses focus", function()
+    local previous_clear_all = renderer.clear_all
+    local previous_uses_placeholders = renderer.uses_placeholders
+    local placeholders = true
+    local cleared = {}
+
+    renderer.clear_all = function()
+      cleared[#cleared + 1] = placeholders
+    end
+    renderer.uses_placeholders = function()
+      return placeholders
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    vim.api.nvim_exec_autocmds("FocusLost", { modeline = false })
+    vim.api.nvim_exec_autocmds("VimSuspend", { modeline = false })
+    placeholders = false
+    vim.api.nvim_exec_autocmds("FocusLost", { modeline = false })
+
+    renderer.clear_all = previous_clear_all
+    renderer.uses_placeholders = previous_uses_placeholders
+
+    assert.are.same({ true, false }, cleared)
+  end)
+
+  it("sends placeholder images again when a tmux client attaches", function()
+    local tmux = require("render_latex.tmux")
+    local previous_resend = renderer.resend_images
+    local previous_uses_placeholders = renderer.uses_placeholders
+    local previous_client_attached = tmux.client_attached
+    local attached = false
+    local resent = 0
+
+    renderer.resend_images = function()
+      resent = resent + 1
+      return 0
+    end
+    renderer.uses_placeholders = function()
+      return true
+    end
+    tmux.client_attached = function()
+      return attached
+    end
+
+    render_latex.setup({ install = { auto = false } })
+    vim.api.nvim_exec_autocmds("FocusGained", { modeline = false })
+    vim.api.nvim_exec_autocmds("VimResized", { modeline = false })
+    attached = true
+    vim.api.nvim_exec_autocmds("VimResume", { modeline = false })
+    vim.api.nvim_exec_autocmds("FocusGained", { modeline = false })
+    vim.api.nvim_exec_autocmds("VimResized", { modeline = false })
+
+    renderer.resend_images = previous_resend
+    renderer.uses_placeholders = previous_uses_placeholders
+    tmux.client_attached = previous_client_attached
+
+    assert.are.equal(2, resent)
+  end)
+
+  it("tells when a client attaches to the pane's tmux session", function()
+    local previous_system = vim.system
+    local previous_executable = vim.fn.executable
+    local previous_tmux, previous_pane = vim.env.TMUX, vim.env.TMUX_PANE
+    local clients = "101\n"
+    local commands = {}
+
+    local tmux = require("render_latex.tmux")
+    vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+    vim.env.TMUX_PANE = "%3"
+    vim.fn.executable = function()
+      return 1
+    end
+    vim.system = function(cmd)
+      commands[#commands + 1] = cmd
+      return {
+        wait = function()
+          return { code = 0, stdout = clients, stderr = "" }
+        end,
+      }
+    end
+
+    -- The first call records the clients, whatever earlier tests left behind
+    tmux.client_attached()
+    local results = { tmux.client_attached() }
+    clients = "101\n202\n"
+    results[#results + 1] = tmux.client_attached()
+    clients = "202\n"
+    results[#results + 1] = tmux.client_attached()
+
+    vim.system = previous_system
+    vim.fn.executable = previous_executable
+    vim.env.TMUX, vim.env.TMUX_PANE = previous_tmux, previous_pane
+
+    assert.are.same({ false, true, false }, results)
+    assert.are.same({ "tmux", "list-clients", "-F", "#{client_pid}", "-t", "%3" }, commands[1])
+  end)
+
   it("hides terminal images on BufWinLeave", function()
     local previous_hide_visible = renderer.hide_visible
     local previous_detach_inactive_windows = renderer.detach_inactive_windows
@@ -2990,6 +3087,158 @@ describe("render_latex.image_backends.kitty", function()
     assert.is_truthy(sent[1].data:find("a=t", 1, true))
     assert.is_truthy(sent[2].data:find("a=p", 1, true))
   end)
+
+  it("sends each virtual image once and frees it with its last handle", function()
+    local previous_send = vim.api.nvim_ui_send
+    local previous_tmux = vim.env.TMUX
+    local sent = {}
+
+    package.loaded["render_latex.image_backends.kitty"] = nil
+    local kitty = require("render_latex.image_backends.kitty")
+
+    vim.api.nvim_ui_send = function(data)
+      sent[#sent + 1] = data
+    end
+    vim.env.TMUX = nil
+
+    local first = kitty.set_virtual("png", { key = "eq", width = 4, height = 2 })
+    local second = kitty.set_virtual("png", { key = "eq", width = 4, height = 2 })
+    local sent_after_set = #sent
+    local first_image, second_image = kitty.image_id(first), kitty.image_id(second)
+    kitty.del(first)
+    local sent_after_first_del = #sent
+    kitty.del(second)
+
+    vim.api.nvim_ui_send = previous_send
+    vim.env.TMUX = previous_tmux
+
+    assert.are_not.equal(first, second)
+    assert.is_not_nil(first_image)
+    assert.are.equal(first_image, second_image)
+    assert.are.equal(2, sent_after_set)
+    assert.is_truthy(sent[1]:find("a=t", 1, true))
+    assert.is_truthy(sent[2]:find("U=1", 1, true))
+    assert.is_truthy(sent[2]:find("c=4", 1, true))
+    assert.is_truthy(sent[2]:find("r=2", 1, true))
+    assert.are.equal(2, sent_after_first_del)
+    assert.are.equal(3, #sent)
+    assert.is_truthy(sent[3]:find("d=I", 1, true))
+  end)
+
+  it("sends virtual images again under the same id", function()
+    local previous_send = vim.api.nvim_ui_send
+    local previous_tmux = vim.env.TMUX
+    local sent = {}
+
+    package.loaded["render_latex.image_backends.kitty"] = nil
+    local kitty = require("render_latex.image_backends.kitty")
+
+    vim.api.nvim_ui_send = function(data)
+      sent[#sent + 1] = data
+    end
+    vim.env.TMUX = nil
+
+    local handle = kitty.set_virtual("png", { key = "eq", width = 4, height = 2 })
+    kitty.set_virtual("png", { key = "other", width = 1, height = 1 })
+    local image_id = kitty.image_id(handle)
+    sent = {}
+    local count = kitty.resend_virtual({ eq = "png", missing = "png" })
+
+    vim.api.nvim_ui_send = previous_send
+    vim.env.TMUX = previous_tmux
+
+    assert.are.equal(1, count)
+    assert.are.equal(2, #sent)
+    assert.is_truthy(sent[1]:find("a=t", 1, true))
+    assert.is_truthy(sent[1]:find("i=" .. image_id, 1, true))
+    assert.is_truthy(sent[2]:find("U=1", 1, true))
+    assert.is_truthy(sent[2]:find("i=" .. image_id, 1, true))
+    assert.is_truthy(sent[2]:find("c=4", 1, true))
+    assert.is_truthy(sent[2]:find("r=2", 1, true))
+    assert.are.equal(image_id, kitty.image_id(handle))
+  end)
+
+  it("frees only its own virtual images when deleting everything", function()
+    local previous_send = vim.api.nvim_ui_send
+    local previous_tmux = vim.env.TMUX
+    local sent = {}
+
+    package.loaded["render_latex.image_backends.kitty"] = nil
+    local kitty = require("render_latex.image_backends.kitty")
+
+    vim.api.nvim_ui_send = function(data)
+      sent[#sent + 1] = data
+    end
+    vim.env.TMUX = nil
+
+    local handle = kitty.set_virtual("png", { key = "eq", width = 1, height = 1 })
+    local image_id = kitty.image_id(handle)
+    sent = {}
+    kitty.del(math.huge)
+
+    vim.api.nvim_ui_send = previous_send
+    vim.env.TMUX = previous_tmux
+
+    assert.are.equal(1, #sent)
+    assert.is_truthy(sent[1]:find("d=I", 1, true))
+    assert.is_truthy(sent[1]:find("i=" .. image_id, 1, true))
+    assert.is_nil(sent[1]:find("d=A", 1, true))
+    assert.is_nil(kitty.image_id(handle))
+  end)
+
+  it("encodes the row and column of each placeholder cell", function()
+    local kitty = require("render_latex.image_backends.kitty")
+    local row = kitty.placeholder_row(2, 3)
+    local placeholder = vim.fn.nr2char(0x10EEEE)
+    local marks = { vim.fn.nr2char(0x0305), vim.fn.nr2char(0x030D), vim.fn.nr2char(0x030E) }
+
+    assert.are.equal(
+      placeholder
+        .. marks[2]
+        .. marks[1]
+        .. placeholder
+        .. marks[2]
+        .. marks[2]
+        .. placeholder
+        .. marks[2]
+        .. marks[3],
+      row
+    )
+  end)
+
+  it("uses placeholders only where they can work", function()
+    local kitty = require("render_latex.image_backends.kitty")
+    local previous_termguicolors = vim.o.termguicolors
+    local previous_term_program = vim.env.TERM_PROGRAM
+    local previous_wezterm = vim.env.WEZTERM_EXECUTABLE
+    vim.env.WEZTERM_EXECUTABLE = nil
+    vim.env.TERM_PROGRAM = "ghostty"
+
+    local results = {}
+    vim.o.termguicolors = true
+    config.setup()
+    results.auto = kitty.placeholders()
+    config.setup({ image = { placeholders = false } })
+    results.disabled = kitty.placeholders()
+    config.setup()
+    vim.env.TERM_PROGRAM = "WezTerm"
+    results.wezterm = kitty.placeholders()
+    config.setup({ image = { placeholders = true } })
+    results.forced_wezterm = kitty.placeholders()
+    vim.o.termguicolors = false
+    results.no_truecolor = kitty.placeholders()
+
+    vim.o.termguicolors = previous_termguicolors
+    vim.env.TERM_PROGRAM = previous_term_program
+    vim.env.WEZTERM_EXECUTABLE = previous_wezterm
+    config.setup()
+
+    assert.is_true(results.auto)
+    assert.is_false(results.disabled)
+    assert.is_false(results.wezterm)
+    assert.is_true(results.forced_wezterm)
+    assert.is_false(results.no_truecolor)
+  end)
 end)
 
 describe("render_latex.install", function()
@@ -3316,6 +3565,138 @@ describe("render_latex.renderer", function()
       error(err)
     end
   end
+
+  it("draws display equations with placeholder text", function()
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_viewport_range = viewport.viewport_range
+    local previous_readblob = vim.fn.readblob
+    local set_virtual_count = 0
+    local released = {}
+    local resent
+    local test_buf
+
+    local backend = {
+      placeholders = function()
+        return true
+      end,
+      set_virtual = function(_, set_opts)
+        set_virtual_count = set_virtual_count + 1
+        return -set_virtual_count, set_opts
+      end,
+      image_id = function()
+        return 0x123456
+      end,
+      placeholder_row = function(row, width)
+        return ("row%d/%d"):format(row, width)
+      end,
+      set = function()
+        error("fixed placements should not be used")
+      end,
+      del = function(handle)
+        released[#released + 1] = handle
+      end,
+      resend_virtual = function(blobs)
+        resent = blobs
+        return vim.tbl_count(blobs)
+      end,
+    }
+    image_backend.status = function()
+      return { available = true, name = "kitty" }
+    end
+    image_backend.get = function()
+      return backend, "kitty"
+    end
+    worker.request_batch = function(_, callback)
+      callback({
+        {
+          result = {
+            width_px = 40,
+            height_px = 100,
+            png_path = "/tmp/render-latex-placeholder-test.png",
+            cache_key = "placeholder-test",
+          },
+        },
+      }, nil)
+    end
+    viewport.viewport_range = function()
+      return 0, 3
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+
+    local ok, err = pcall(function()
+      config.setup({
+        render_modes = { vim.api.nvim_get_mode().mode },
+        render = { equation_labels = false, scale = 1 },
+        image = { cell_width_px = 10, cell_height_px = 20 },
+      })
+      test_buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_set_current_buf(test_buf)
+      vim.bo[test_buf].filetype = "markdown"
+      vim.api.nvim_buf_set_lines(test_buf, 0, -1, false, { "$$", "x^2", "$$", "after" })
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+      renderer.set_suppressed("cmdline", false)
+      renderer.set_suppressed("floating", false)
+      renderer.attach(test_buf)
+      renderer.render(test_buf)
+      assert.is_true(vim.wait(1000, function()
+        return set_virtual_count > 0
+      end, 10))
+      renderer.render(test_buf)
+
+      local overlays = {}
+      local reserved = {}
+      for _, mark in
+        ipairs(vim.api.nvim_buf_get_extmarks(test_buf, config.ns, 0, -1, { details = true }))
+      do
+        local details = mark[4]
+        if details.virt_text_win_col ~= nil then
+          overlays[mark[2]] = details.virt_text[1]
+        end
+        for _, line in ipairs(details.virt_lines or {}) do
+          reserved[#reserved + 1] = line[2]
+        end
+      end
+
+      -- 100px is 5 cell rows: row 1 on the first source line, 2 reserved rows
+      -- below it, then rows 4 and 5 on the remaining source lines.
+      local cells = math.ceil(40 / 10)
+      assert.are.equal(1, set_virtual_count)
+      assert.are.same({ ("row1/%d"):format(cells), "RenderLatexImage" .. 0x123456 }, overlays[0])
+      assert.are.equal(("row4/%d"):format(cells), overlays[1] and overlays[1][1])
+      assert.are.equal(("row5/%d"):format(cells), overlays[2] and overlays[2][1])
+      assert.are.same(
+        { ("row2/%d"):format(cells), ("row3/%d"):format(cells) },
+        vim.tbl_map(function(chunk)
+          return chunk[1]
+        end, reserved)
+      )
+      local hl = vim.api.nvim_get_hl(0, { name = "RenderLatexImage" .. 0x123456 })
+      assert.are.equal(0x123456, hl.fg)
+
+      assert.are.equal(1, renderer.resend_images())
+      assert.are.same({ ("placeholder-test:%d:5"):format(cells) }, vim.tbl_keys(resent))
+      assert.are.equal("png", resent[("placeholder-test:%d:5"):format(cells)])
+    end)
+
+    if test_buf ~= nil and vim.api.nvim_buf_is_valid(test_buf) then
+      renderer.detach(test_buf)
+      vim.api.nvim_buf_delete(test_buf, { force = true })
+    end
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    worker.request_batch = previous_request_batch
+    viewport.viewport_range = previous_viewport_range
+    vim.fn.readblob = previous_readblob
+    config.setup()
+
+    if not ok then
+      error(err)
+    end
+  end)
 
   it("resolves automatic render options", function()
     local opts = renderer.resolved_options()
