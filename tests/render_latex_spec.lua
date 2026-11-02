@@ -3537,6 +3537,100 @@ describe("render_latex.renderer", function()
     assert.are.equal(2, request_count)
   end)
 
+  it("numbers equation labels by their position in the buffer", function()
+    config.setup({ render = { equation_labels = "right" } })
+    local previous_img = vim.ui.img
+    local previous_backend_status = image_backend.status
+    local previous_backend_get = image_backend.get
+    local previous_request_batch = worker.request_batch
+    local previous_detect_scan = detect.scan
+    local previous_viewport_range = viewport.viewport_range
+    local previous_readblob = vim.fn.readblob
+    local backend = {
+      set = function()
+        return 1
+      end,
+      del = function() end,
+      get = function()
+        return nil
+      end,
+    }
+    vim.ui.img = backend
+    image_backend.status = function()
+      return { available = true, name = "nvim" }
+    end
+    image_backend.get = function()
+      return backend, "nvim"
+    end
+    local requests = 0
+    worker.request_batch = function(batch, callback)
+      requests = requests + 1
+      local results = {}
+      for index in ipairs(batch) do
+        results[index] = {
+          result = {
+            width_px = 10,
+            height_px = 10,
+            png_path = "/tmp/render-latex-label-test.png",
+            cache_key = "label-test-" .. requests .. "-" .. index,
+          },
+        }
+      end
+      callback(results, nil)
+    end
+    vim.fn.readblob = function()
+      return "png"
+    end
+    detect.scan = function()
+      return {
+        { key = "display:1:3", start_row = 0, end_row = 2, text = "a", quoted = false },
+        { key = "display:5:7", start_row = 4, end_row = 6, text = "b", quoted = false },
+      }
+    end
+    -- Only the second equation is in view
+    viewport.viewport_range = function()
+      return 4, 7
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_set_current_buf(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "$$", "a", "$$", "", "$$", "b", "$$", "end" })
+    vim.api.nvim_win_set_cursor(0, { 8, 0 })
+
+    local ok, err = pcall(function()
+      renderer.attach(buf)
+      renderer.render(buf)
+      local labels = {}
+      vim.wait(200, function()
+        labels = {}
+        for _, mark in
+          ipairs(vim.api.nvim_buf_get_extmarks(buf, config.ns, 0, -1, { details = true }))
+        do
+          local text = mark[4].virt_text
+          if text and text[1] and text[1][1]:match("^Eq%.") then
+            labels[#labels + 1] = { mark[2], text[1][1] }
+          end
+        end
+        return #labels > 0
+      end)
+      assert.are.same({ { 4, "Eq. 2" } }, labels)
+    end)
+
+    renderer.clear(buf)
+    vim.ui.img = previous_img
+    image_backend.status = previous_backend_status
+    image_backend.get = previous_backend_get
+    worker.request_batch = previous_request_batch
+    detect.scan = previous_detect_scan
+    viewport.viewport_range = previous_viewport_range
+    vim.fn.readblob = previous_readblob
+    config.setup()
+    if not ok then
+      error(err)
+    end
+  end)
+
   it("uses jupynvim cell margins and suppresses default labels", function()
     with_jupynvim_render({}, function(buf, captured_opts)
       assert.is_truthy(captured_opts)

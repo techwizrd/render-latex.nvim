@@ -801,19 +801,23 @@ with_backend_batch = function(backend, callback)
   return result
 end
 
+-- The equations in view, and the number of each: its position among all display
+-- equations in the buffer, so a label doesn't change as the window scrolls.
 local function visible_equations_from_ranges(indexed_equations, ranges)
   local visible = {}
-  for _, equation in ipairs(indexed_equations) do
+  local numbers = {}
+  for number, equation in ipairs(indexed_equations) do
     if not Viewport.fold_closed(equation) then
       for _, range in ipairs(ranges) do
         if equation.end_row >= range.top and equation.start_row <= range.bottom then
           visible[#visible + 1] = equation
+          numbers[#visible] = number
           break
         end
       end
     end
   end
-  return visible
+  return visible, numbers
 end
 
 local function should_suppress_label(context)
@@ -827,12 +831,12 @@ local function clear_suppressed_label(context, bufnr, state, equation)
   end
 end
 
-local function update_label(context, bufnr, state, equation, visible_index)
+local function update_label(context, bufnr, state, equation, number)
   if should_suppress_label(context) then
     Annotations.clear_label(bufnr, Config.ns, state, equation.key)
     return
   end
-  Annotations.set_equation_label(bufnr, Config.ns, state, equation, visible_index)
+  Annotations.set_equation_label(bufnr, Config.ns, state, equation, number)
 end
 
 local function update_image(bufnr, winid, equation, meta, backend, window, preview)
@@ -974,7 +978,6 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
   local state = get_buffer_state(bufnr)
   local active = {}
   local active_images = {}
-  local visible_index = 0
   local option_cache = {}
   local backend_status = ImageBackend.status()
   local backend = backend_status.available and ImageBackend.get() or nil
@@ -984,8 +987,8 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
   local context = Sources.render_context(bufnr)
 
   with_backend_batch(backend, function()
-    for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
-      visible_index = visible_index + 1
+    local visible, numbers = visible_equations_from_ranges(indexed_equations, snapshot.ranges)
+    for index, equation in ipairs(visible) do
       active[equation.key] = true
       clear_suppressed_label(context, bufnr, state, equation)
       local meta = state.metadata[equation.key]
@@ -1047,7 +1050,7 @@ local function update_existing_visible(bufnr, indexed_equations, snapshot)
         needs_render = true
       else
         ensure_mark(bufnr, equation, meta, context)
-        update_label(context, bufnr, state, equation, visible_index)
+        update_label(context, bufnr, state, equation, numbers[index])
         for _, winid in ipairs(snapshot.winids) do
           if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
             active_images[winid] = active_images[winid] or {}
@@ -1189,13 +1192,12 @@ function M.render(bufnr)
   local backend = backend_status.available and ImageBackend.get() or nil
   local floating_suppressed = suppression.floating
   local batch = {}
-  local visible_index = 0
   local option_cache = {}
   local context = Sources.render_context(bufnr)
 
   with_backend_batch(backend, function()
-    for _, equation in ipairs(visible_equations_from_ranges(indexed_equations, snapshot.ranges)) do
-      visible_index = visible_index + 1
+    local visible, numbers = visible_equations_from_ranges(indexed_equations, snapshot.ranges)
+    for index, equation in ipairs(visible) do
       active[equation.key] = true
       clear_suppressed_label(context, bufnr, state, equation)
       local meta = state.metadata[equation.key]
@@ -1256,7 +1258,7 @@ function M.render(bufnr)
         batch[#batch + 1] = equation
       else
         ensure_mark(bufnr, equation, meta, context)
-        update_label(context, bufnr, state, equation, visible_index)
+        update_label(context, bufnr, state, equation, numbers[index])
         for _, winid in ipairs(snapshot.winids) do
           if update_image(bufnr, winid, equation, meta, backend, snapshot.windows[winid]) then
             active_images[winid] = active_images[winid] or {}
