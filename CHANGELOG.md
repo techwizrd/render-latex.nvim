@@ -8,6 +8,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Fixed
 
+- Fixed the render-markdown repro with the nvim-treesitter `main` branch, now its default, which removed `parsers.has_parser`, `nvim-treesitter.configs` and `:TSInstallSync`. The repro checks out `main` on Neovim 0.12+ and `master` on 0.10 and 0.11.
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
 
 ## 0.1.0-rc5 - 2026-10-17

@@ -10,22 +10,35 @@ require("lazy").setup({
   spec = {
     {
       "nvim-treesitter/nvim-treesitter",
+      -- The default branch, main, needs Neovim 0.12 and the tree-sitter CLI. The
+      -- archived master branch still runs on Neovim 0.10 and 0.11.
+      branch = vim.fn.has("nvim-0.12") == 1 and "main" or "master",
       lazy = false,
       config = function()
-        local parsers = require("nvim-treesitter.parsers")
-        local needed = {}
-        for _, lang in ipairs({ "html", "latex", "markdown", "markdown_inline", "yaml" }) do
-          if not parsers.has_parser(lang) then
-            needed[#needed + 1] = lang
+        local langs = { "html", "latex", "markdown", "markdown_inline", "yaml" }
+        -- Pick the API from the checkout, since an existing clone may be on either branch
+        local ok_configs, configs = pcall(require, "nvim-treesitter.configs")
+        if ok_configs then
+          local parsers = require("nvim-treesitter.parsers")
+          local needed = {}
+          for _, lang in ipairs(langs) do
+            if not parsers.has_parser(lang) then
+              needed[#needed + 1] = lang
+            end
           end
+          if #needed > 0 then
+            pcall(vim.cmd, "TSInstallSync " .. table.concat(needed, " "))
+          end
+          configs.setup({
+            ensure_installed = {},
+            highlight = { enable = false },
+          })
+        else
+          -- main skips installed parsers and leaves highlighting off unless it is started
+          pcall(function()
+            require("nvim-treesitter").install(langs):wait(300000)
+          end)
         end
-        if #needed > 0 then
-          pcall(vim.cmd, "TSInstallSync " .. table.concat(needed, " "))
-        end
-        require("nvim-treesitter.configs").setup({
-          ensure_installed = {},
-          highlight = { enable = false },
-        })
         -- Keep this repro focused on render-markdown + render-latex overlap. On some
         -- Neovim nightly / nvim-treesitter combinations, Markdown language injections
         -- can fail before either plugin gets to render anything.
