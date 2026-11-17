@@ -8,6 +8,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Fixed
 
+- Gave each repro config its own Neovim data, state, cache and config directories. `LAZY_STDPATH` only takes effect through `lazy.minit`, so the repros installed their plugins into the user's own lazy.nvim directory.
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
 
 ## 0.1.0-rc5 - 2026-10-17

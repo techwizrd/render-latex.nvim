@@ -5,7 +5,13 @@ local plugin_root = vim.fn.fnamemodify(source, ":p:h:h")
 local worker_bin = plugin_root .. "/target/release/render-latex-worker"
 
 function M.bootstrap_lazy(stdpath_suffix)
-  vim.env.LAZY_STDPATH = vim.fn.stdpath("data") .. "/" .. stdpath_suffix
+  -- Give each repro its own stdpaths, as lazy.minit does for LAZY_STDPATH, so the
+  -- plugins, parsers and state it writes stay out of the user's Neovim directories.
+  -- lazy.setup() reads LAZY_STDPATH only through lazy.minit, so set the XDG paths here.
+  local root = vim.fs.joinpath(vim.fn.stdpath("data"), stdpath_suffix)
+  for _, name in ipairs({ "config", "data", "state", "cache" }) do
+    vim.env[("XDG_%s_HOME"):format(name:upper())] = vim.fs.joinpath(root, name)
+  end
 
   local lazypath = vim.fs.joinpath(vim.fn.stdpath("data"), "lazy", "lazy.nvim")
   if vim.fn.isdirectory(lazypath) == 0 then
