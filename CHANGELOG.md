@@ -8,6 +8,7 @@ This project follows a practical changelog format inspired by [Keep a Changelog]
 
 ### Fixed
 
+- Math on list item lines indented four spaces is no longer taken for an indented code block. The Markdown parser decides which indented lines are code, and the line scan is used only when the parser is unavailable.
 - Moved the rolling `unreleased` tag after publishing worker assets so source archives match the published build.
 
 ## 0.1.0-rc5 - 2026-10-17

@@ -522,6 +522,53 @@ describe("render_latex.detect", function()
     assert.are.equal("inline", inline[1].text)
   end)
 
+  it("finds math on list item lines indented four spaces", function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "- topic",
+      "  - question  ",
+      "    $$ visible $$",
+      "  - another question  ",
+      "    *(answer with $inline$)*",
+    })
+
+    local equations = detect.scan(buf)
+    local inline = detect.inline(buf)
+
+    assert.are.equal(1, #equations)
+    assert.are.equal("visible", equations[1].text)
+    assert.are.equal(1, #inline)
+    assert.are.equal("inline", inline[1].text)
+  end)
+
+  it("ignores lines indented four spaces when the markdown parser is unavailable", function()
+    local previous_detect = package.loaded["render_latex.detect"]
+    local previous_parse = vim.treesitter.query.parse
+    vim.treesitter.query.parse = function(lang, query)
+      if lang == "markdown" then
+        error("missing parser")
+      end
+      return previous_parse(lang, query)
+    end
+    package.loaded["render_latex.detect"] = nil
+
+    local ok, fallback_detect = pcall(require, "render_latex.detect")
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "- question",
+      "    $$ hidden $$",
+      "$$ visible $$",
+    })
+    local equations = ok and fallback_detect.scan(buf) or {}
+
+    package.loaded["render_latex.detect"] = previous_detect
+    vim.treesitter.query.parse = previous_parse
+
+    assert.is_true(ok)
+    assert.are.equal(1, #equations)
+    assert.are.equal("visible", equations[1].text)
+  end)
+
   it("finds display math inside nested blockquotes", function()
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
