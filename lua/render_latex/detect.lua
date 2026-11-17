@@ -15,6 +15,17 @@ if not ok_query then
   latex_block_query = nil
 end
 
+local ok_code_query, indented_code_query = pcall(
+  vim.treesitter.query.parse,
+  "markdown",
+  [[
+  (indented_code_block) @code
+]]
+)
+if not ok_code_query then
+  indented_code_query = nil
+end
+
 local function normalize_text(text)
   local trimmed = vim.trim(text)
 
@@ -194,24 +205,58 @@ local function obsidian_comment_rows(lines)
   return rows
 end
 
-local function indented_code_rows(lines)
-  local rows = {}
+-- Rows of the indented code blocks the Markdown parser finds. A line indented four
+-- spaces inside a list item continues the item, so only the parser can tell it from code.
+-- Returns nil when the parser is unavailable.
+local function parsed_indented_code_rows(bufnr)
+  if indented_code_query == nil then
+    return nil
+  end
+  local ok, trees = pcall(function()
+    local parser = vim.treesitter.get_parser(bufnr, "markdown")
+    return parser and parser:parse()
+  end)
+  if not ok or trees == nil then
+    return nil
+  end
 
+  local rows = {}
+  for _, tree in ipairs(trees) do
+    for _, node in indented_code_query:iter_captures(tree:root(), bufnr) do
+      local start_row, _, end_row, end_col = node:range()
+      if end_col == 0 and end_row > start_row then
+        end_row = end_row - 1
+      end
+      for row = start_row, end_row do
+        rows[row + 1] = true
+      end
+    end
+  end
+  return rows
+end
+
+local function indented_code_rows(bufnr, lines)
+  local rows = {}
   for index, line in ipairs(lines) do
     if line:match("^    %S") or line:match("^\t%S") then
       rows[index] = true
     end
   end
 
-  return rows
+  -- Ask the parser only when the line scan found candidates, so buffers without
+  -- indented lines skip Tree-sitter.
+  if next(rows) == nil then
+    return rows
+  end
+  return parsed_indented_code_rows(bufnr) or rows
 end
 
-local function ignored_rows(lines)
+local function ignored_rows(bufnr, lines)
   local rows = fenced_rows(lines)
   for _, group in ipairs({
     frontmatter_rows(lines),
     obsidian_comment_rows(lines),
-    indented_code_rows(lines),
+    indented_code_rows(bufnr, lines),
   }) do
     for row in pairs(group) do
       rows[row] = true
@@ -286,7 +331,7 @@ local function scan_context(bufnr)
     })
   end
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local ignored = ignored_rows(lines)
+  local ignored = ignored_rows(bufnr, lines)
   local context = {
     tick = tick,
     lines = lines,
